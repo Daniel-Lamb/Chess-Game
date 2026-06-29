@@ -11,4 +11,11 @@ export interface Position {
   col: number;
 }
 
+export interface CastlingRights {
+  whiteKingside: boolean;
+  whiteQueenside: boolean;
+  blackKingside: boolean;
+  blackQueenside: boolean;
+}
+
 export type Board = (Piece | null)[][];

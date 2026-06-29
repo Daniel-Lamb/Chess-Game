@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { Board, Position } from './types/chess';
+import { Board, Position, CastlingRights } from './types/chess';
 import {
   createInitialBoard,
   isValidMove,
@@ -7,6 +7,9 @@ import {
   isInCheck,
   hasAnyValidMoves,
   promotePawn,
+  getEnPassantTarget,
+  updateCastlingRights,
+  DEFAULT_CASTLING_RIGHTS,
 } from './utils/chessLogic';
 import ChessBoard from './components/ChessBoard';
 
@@ -20,6 +23,8 @@ function App() {
   const [winner, setWinner] = useState<string | null>(null);
   const [validMoves, setValidMoves] = useState<Position[]>([]);
   const [moveCount, setMoveCount] = useState(0);
+  const [enPassantTarget, setEnPassantTarget] = useState<Position | null>(null);
+  const [castlingRights, setCastlingRights] = useState<CastlingRights>(DEFAULT_CASTLING_RIGHTS);
 
   const resetGame = () => {
     setBoard(createInitialBoard());
@@ -29,6 +34,8 @@ function App() {
     setWinner(null);
     setValidMoves([]);
     setMoveCount(0);
+    setEnPassantTarget(null);
+    setCastlingRights(DEFAULT_CASTLING_RIGHTS);
   };
 
   const handleSquareClick = useCallback(
@@ -39,7 +46,7 @@ function App() {
         const piece = board[position.row][position.col];
         if (piece && piece.color === currentPlayer) {
           setSelectedPosition(position);
-          setValidMoves(getValidMoves(board, position, currentPlayer));
+          setValidMoves(getValidMoves(board, position, currentPlayer, enPassantTarget, castlingRights));
         }
         return;
       }
@@ -55,20 +62,48 @@ function App() {
       const clickedPiece = board[position.row][position.col];
       if (clickedPiece && clickedPiece.color === currentPlayer) {
         setSelectedPosition(position);
-        setValidMoves(getValidMoves(board, position, currentPlayer));
+        setValidMoves(getValidMoves(board, position, currentPlayer, enPassantTarget, castlingRights));
         return;
       }
 
       // Attempt move
-      if (isValidMove(board, selectedPosition, position, currentPlayer)) {
+      if (isValidMove(board, selectedPosition, position, currentPlayer, enPassantTarget, castlingRights)) {
+        const movingPiece = board[selectedPosition.row][selectedPosition.col]!;
         let newBoard = board.map(row => [...row]);
-        newBoard[position.row][position.col] = newBoard[selectedPosition.row][selectedPosition.col];
+
+        // Place piece at destination, clear source
+        newBoard[position.row][position.col] = movingPiece;
         newBoard[selectedPosition.row][selectedPosition.col] = null;
+
+        // Castling: slide the rook to the other side of the king
+        if (movingPiece.type === 'king' && Math.abs(position.col - selectedPosition.col) === 2) {
+          const rRow = selectedPosition.row;
+          if (position.col === 6) {         // kingside: rook h→f
+            newBoard[rRow][5] = newBoard[rRow][7];
+            newBoard[rRow][7] = null;
+          } else {                          // queenside: rook a→d
+            newBoard[rRow][3] = newBoard[rRow][0];
+            newBoard[rRow][0] = null;
+          }
+        }
+
+        // En passant: remove the pawn that was skipped over
+        if (movingPiece.type === 'pawn' &&
+            enPassantTarget &&
+            position.row === enPassantTarget.row &&
+            position.col === enPassantTarget.col) {
+          newBoard[selectedPosition.row][position.col] = null;
+        }
+
+        // Auto-promote pawns to queen
         newBoard = promotePawn(newBoard, position);
+
+        const newCastlingRights = updateCastlingRights(castlingRights, selectedPosition, position, movingPiece);
+        const newEnPassantTarget = getEnPassantTarget(selectedPosition, position, movingPiece);
 
         const nextPlayer = currentPlayer === 'white' ? 'black' : 'white';
         const inCheck = isInCheck(newBoard, nextPlayer);
-        const hasMoves = hasAnyValidMoves(newBoard, nextPlayer);
+        const hasMoves = hasAnyValidMoves(newBoard, nextPlayer, newEnPassantTarget, newCastlingRights);
 
         let newStatus: GameStatus;
         if (!hasMoves) {
@@ -83,18 +118,21 @@ function App() {
         setCurrentPlayer(nextPlayer);
         setGameStatus(newStatus);
         setMoveCount(n => n + 1);
+        setCastlingRights(newCastlingRights);
+        setEnPassantTarget(newEnPassantTarget);
       }
 
       setSelectedPosition(null);
       setValidMoves([]);
     },
-    [board, selectedPosition, currentPlayer, gameStatus]
+    [board, selectedPosition, currentPlayer, gameStatus, enPassantTarget, castlingRights],
   );
 
   const statusMessage = () => {
     if (gameStatus === 'checkmate') return `Checkmate — ${winner} wins!`;
     if (gameStatus === 'stalemate') return 'Stalemate — Draw!';
-    if (gameStatus === 'check') return `${currentPlayer.charAt(0).toUpperCase() + currentPlayer.slice(1)} is in check!`;
+    if (gameStatus === 'check')
+      return `${currentPlayer.charAt(0).toUpperCase() + currentPlayer.slice(1)} is in check!`;
     return null;
   };
 
