@@ -12,10 +12,15 @@ import {
   DEFAULT_CASTLING_RIGHTS,
 } from './utils/chessLogic';
 import ChessBoard from './components/ChessBoard';
+import OpeningTrainer from './components/OpeningTrainer';
 
+type AppMode = 'play' | 'train';
 type GameStatus = 'playing' | 'check' | 'checkmate' | 'stalemate';
 
 function App() {
+  const [mode, setMode] = useState<AppMode>('play');
+
+  // ── Free play state ───────────────────────────────────────────────────────
   const [board, setBoard] = useState<Board>(createInitialBoard());
   const [selectedPosition, setSelectedPosition] = useState<Position | null>(null);
   const [currentPlayer, setCurrentPlayer] = useState<'white' | 'black'>('white');
@@ -51,14 +56,12 @@ function App() {
         return;
       }
 
-      // Deselect on same square
       if (selectedPosition.row === position.row && selectedPosition.col === position.col) {
         setSelectedPosition(null);
         setValidMoves([]);
         return;
       }
 
-      // Switch selection to another own piece
       const clickedPiece = board[position.row][position.col];
       if (clickedPiece && clickedPiece.color === currentPlayer) {
         setSelectedPosition(position);
@@ -66,28 +69,19 @@ function App() {
         return;
       }
 
-      // Attempt move
       if (isValidMove(board, selectedPosition, position, currentPlayer, enPassantTarget, castlingRights)) {
         const movingPiece = board[selectedPosition.row][selectedPosition.col]!;
         let newBoard = board.map(row => [...row]);
 
-        // Place piece at destination, clear source
         newBoard[position.row][position.col] = movingPiece;
         newBoard[selectedPosition.row][selectedPosition.col] = null;
 
-        // Castling: slide the rook to the other side of the king
         if (movingPiece.type === 'king' && Math.abs(position.col - selectedPosition.col) === 2) {
           const rRow = selectedPosition.row;
-          if (position.col === 6) {         // kingside: rook h→f
-            newBoard[rRow][5] = newBoard[rRow][7];
-            newBoard[rRow][7] = null;
-          } else {                          // queenside: rook a→d
-            newBoard[rRow][3] = newBoard[rRow][0];
-            newBoard[rRow][0] = null;
-          }
+          if (position.col === 6) { newBoard[rRow][5] = newBoard[rRow][7]; newBoard[rRow][7] = null; }
+          else                    { newBoard[rRow][3] = newBoard[rRow][0]; newBoard[rRow][0] = null; }
         }
 
-        // En passant: remove the pawn that was skipped over
         if (movingPiece.type === 'pawn' &&
             enPassantTarget &&
             position.row === enPassantTarget.row &&
@@ -95,12 +89,10 @@ function App() {
           newBoard[selectedPosition.row][position.col] = null;
         }
 
-        // Auto-promote pawns to queen
         newBoard = promotePawn(newBoard, position);
 
         const newCastlingRights = updateCastlingRights(castlingRights, selectedPosition, position, movingPiece);
         const newEnPassantTarget = getEnPassantTarget(selectedPosition, position, movingPiece);
-
         const nextPlayer = currentPlayer === 'white' ? 'black' : 'white';
         const inCheck = isInCheck(newBoard, nextPlayer);
         const hasMoves = hasAnyValidMoves(newBoard, nextPlayer, newEnPassantTarget, newCastlingRights);
@@ -138,51 +130,79 @@ function App() {
 
   const msg = statusMessage();
 
+  // ── Mode tab styles ───────────────────────────────────────────────────────
+  const tabClass = (m: AppMode) =>
+    `px-5 py-2 rounded-lg text-sm font-semibold transition-colors ${
+      mode === m
+        ? 'bg-blue-600 text-white'
+        : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
+    }`;
+
   return (
     <div className="min-h-screen bg-gray-800 flex flex-col items-center justify-center p-4">
       <div className="bg-gray-900 px-8 pt-8 pb-6 rounded-xl shadow-2xl">
-        <h1 className="text-3xl font-bold mb-4 text-center text-white tracking-widest uppercase">
+        <h1 className="text-3xl font-bold mb-5 text-center text-white tracking-widest uppercase">
           Chess
         </h1>
 
-        <div className="mb-4 text-center space-y-1 min-h-[52px]">
-          {(gameStatus === 'playing' || gameStatus === 'check') && (
-            <p className="text-base font-semibold text-gray-300">
-              {currentPlayer === 'white' ? '⬜' : '⬛'}{' '}
-              {currentPlayer.charAt(0).toUpperCase() + currentPlayer.slice(1)}'s turn
-            </p>
-          )}
-          {msg && (
-            <p
-              className={`text-base font-bold ${
-                gameStatus === 'checkmate'
-                  ? 'text-yellow-400'
-                  : gameStatus === 'stalemate'
-                  ? 'text-blue-400'
-                  : 'text-red-400'
-              }`}
-            >
-              {msg}
-            </p>
-          )}
-          <p className="text-xs text-gray-600">Move {moveCount}</p>
-        </div>
-
-        <ChessBoard
-          board={board}
-          selectedPosition={selectedPosition}
-          validMoves={validMoves}
-          onSquareClick={handleSquareClick}
-        />
-
-        <div className="mt-5 text-center">
-          <button
-            onClick={resetGame}
-            className="px-6 py-2 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-semibold rounded-lg transition-colors duration-150 shadow"
-          >
-            New Game
+        {/* Mode switcher */}
+        <div className="flex gap-1 justify-center mb-6 bg-gray-800 rounded-xl p-1">
+          <button className={tabClass('play')} onClick={() => setMode('play')}>
+            Free Play
+          </button>
+          <button className={tabClass('train')} onClick={() => setMode('train')}>
+            Opening Trainer
           </button>
         </div>
+
+        {/* Free play */}
+        {mode === 'play' && (
+          <>
+            <div className="mb-4 text-center space-y-1 min-h-[52px]">
+              {(gameStatus === 'playing' || gameStatus === 'check') && (
+                <p className="text-base font-semibold text-gray-300">
+                  {currentPlayer === 'white' ? '⬜' : '⬛'}{' '}
+                  {currentPlayer.charAt(0).toUpperCase() + currentPlayer.slice(1)}'s turn
+                </p>
+              )}
+              {msg && (
+                <p
+                  className={`text-base font-bold ${
+                    gameStatus === 'checkmate'
+                      ? 'text-yellow-400'
+                      : gameStatus === 'stalemate'
+                      ? 'text-blue-400'
+                      : 'text-red-400'
+                  }`}
+                >
+                  {msg}
+                </p>
+              )}
+              <p className="text-xs text-gray-600">Move {moveCount}</p>
+            </div>
+
+            <ChessBoard
+              board={board}
+              selectedPosition={selectedPosition}
+              validMoves={validMoves}
+              onSquareClick={handleSquareClick}
+            />
+
+            <div className="mt-5 text-center">
+              <button
+                onClick={resetGame}
+                className="px-6 py-2 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-semibold rounded-lg transition-colors duration-150 shadow"
+              >
+                New Game
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* Opening trainer */}
+        {mode === 'train' && (
+          <OpeningTrainer onExit={() => setMode('play')} />
+        )}
       </div>
     </div>
   );
