@@ -14,32 +14,225 @@ import ChessBoard, { MovePreview } from './ChessBoard';
 
 type Phase = 'setup' | 'player' | 'thinking' | 'off-book' | 'free';
 
-// ── Static fallback data for the starting position ────────────────────────────
-// Used when the Lichess API is unavailable so the trainer is always interactive.
-const FALLBACK_START: LichessMove[] = [
-  { uci: 'e2e4', san: 'e4',  white: 400, draws: 100, black: 280, averageRating: 2450 },
-  { uci: 'd2d4', san: 'd4',  white: 340, draws:  95, black: 230, averageRating: 2455 },
-  { uci: 'g1f3', san: 'Nf3', white: 100, draws:  28, black:  70, averageRating: 2445 },
-];
-
-// Known opening names for common first moves — fills cards instantly without API
-const KNOWN_OPENINGS: Record<string, { name: string; eco: string }> = {
-  'e2e4': { name: "King's Pawn Opening",  eco: 'B00' },
-  'd2d4': { name: "Queen's Pawn Opening", eco: 'D00' },
-  'g1f3': { name: 'Réti Opening',         eco: 'A04' },
-  'c2c4': { name: 'English Opening',      eco: 'A10' },
-  'b1c3': { name: "Van Geet Opening",     eco: 'A00' },
-  // responses to e4
-  'e7e5': { name: 'Open Game',            eco: 'C20' },
-  'c7c5': { name: 'Sicilian Defence',     eco: 'B20' },
-  'e7e6': { name: 'French Defence',       eco: 'C00' },
-  'c7c6': { name: 'Caro-Kann Defence',    eco: 'B10' },
-  'd7d5': { name: 'Scandinavian Defence', eco: 'B01' },
-  // responses to d4
-  'd7d5': { name: "Queen's Pawn Game",    eco: 'D00' },
-  'g8f6': { name: 'Indian Defence',       eco: 'A45' },
-  'f7f5': { name: 'Dutch Defence',        eco: 'A80' },
+// ── Fallback position tree (offline / API-unavailable) ───────────────────────
+// Key = move history joined with ',' ('' = starting position)
+const FALLBACK_POSITIONS: Record<string, LichessMove[]> = {
+  '': [
+    { uci: 'e2e4', san: 'e4',   white: 400, draws: 100, black: 280, averageRating: 2450 },
+    { uci: 'd2d4', san: 'd4',   white: 340, draws:  95, black: 230, averageRating: 2455 },
+    { uci: 'g1f3', san: 'Nf3',  white: 100, draws:  28, black:  70, averageRating: 2445 },
+    { uci: 'c2c4', san: 'c4',   white:  90, draws:  25, black:  65, averageRating: 2445 },
+  ],
+  'e2e4': [
+    { uci: 'e7e5', san: 'e5',   white: 280, draws:  80, black: 250, averageRating: 2450 },
+    { uci: 'c7c5', san: 'c5',   white: 240, draws:  70, black: 190, averageRating: 2455 },
+    { uci: 'e7e6', san: 'e6',   white: 180, draws:  60, black: 150, averageRating: 2445 },
+    { uci: 'c7c6', san: 'c6',   white: 160, draws:  50, black: 130, averageRating: 2440 },
+    { uci: 'd7d5', san: 'd5',   white: 100, draws:  30, black:  80, averageRating: 2450 },
+  ],
+  'd2d4': [
+    { uci: 'd7d5', san: 'd5',   white: 250, draws:  80, black: 200, averageRating: 2455 },
+    { uci: 'g8f6', san: 'Nf6',  white: 230, draws:  75, black: 180, averageRating: 2460 },
+    { uci: 'c7c5', san: 'c5',   white: 120, draws:  40, black:  95, averageRating: 2450 },
+    { uci: 'f7f5', san: 'f5',   white: 100, draws:  35, black:  80, averageRating: 2440 },
+  ],
+  'g1f3': [
+    { uci: 'd7d5', san: 'd5',   white: 120, draws:  40, black: 100, averageRating: 2450 },
+    { uci: 'g8f6', san: 'Nf6',  white: 110, draws:  38, black:  90, averageRating: 2455 },
+    { uci: 'c7c5', san: 'c5',   white:  90, draws:  30, black:  75, averageRating: 2450 },
+  ],
+  'c2c4': [
+    { uci: 'e7e5', san: 'e5',   white: 100, draws:  35, black:  85, averageRating: 2455 },
+    { uci: 'g8f6', san: 'Nf6',  white:  90, draws:  30, black:  75, averageRating: 2450 },
+    { uci: 'c7c5', san: 'c5',   white:  80, draws:  28, black:  65, averageRating: 2445 },
+  ],
+  'e2e4,e7e5': [
+    { uci: 'g1f3', san: 'Nf3',  white: 200, draws:  65, black: 160, averageRating: 2455 },
+    { uci: 'b1c3', san: 'Nc3',  white: 100, draws:  35, black:  80, averageRating: 2445 },
+    { uci: 'f1c4', san: 'Bc4',  white:  90, draws:  30, black:  70, averageRating: 2445 },
+  ],
+  'e2e4,c7c5': [
+    { uci: 'g1f3', san: 'Nf3',  white: 220, draws:  70, black: 175, averageRating: 2460 },
+    { uci: 'b1c3', san: 'Nc3',  white:  80, draws:  25, black:  65, averageRating: 2450 },
+    { uci: 'c2c3', san: 'c3',   white:  60, draws:  20, black:  50, averageRating: 2445 },
+  ],
+  'e2e4,e7e6': [
+    { uci: 'd2d4', san: 'd4',   white: 180, draws:  60, black: 150, averageRating: 2455 },
+    { uci: 'g1f3', san: 'Nf3',  white:  60, draws:  20, black:  50, averageRating: 2440 },
+  ],
+  'e2e4,c7c6': [
+    { uci: 'd2d4', san: 'd4',   white: 160, draws:  55, black: 130, averageRating: 2455 },
+    { uci: 'b1c3', san: 'Nc3',  white:  80, draws:  25, black:  65, averageRating: 2445 },
+  ],
+  'e2e4,d7d5': [
+    { uci: 'e4d5', san: 'exd5', white: 140, draws:  45, black: 110, averageRating: 2455 },
+    { uci: 'b1c3', san: 'Nc3',  white:  60, draws:  20, black:  50, averageRating: 2445 },
+  ],
+  'd2d4,d7d5': [
+    { uci: 'c2c4', san: 'c4',   white: 200, draws:  70, black: 165, averageRating: 2460 },
+    { uci: 'g1f3', san: 'Nf3',  white: 100, draws:  35, black:  80, averageRating: 2450 },
+    { uci: 'c1f4', san: 'Bf4',  white:  80, draws:  28, black:  65, averageRating: 2445 },
+  ],
+  'd2d4,g8f6': [
+    { uci: 'c2c4', san: 'c4',   white: 220, draws:  75, black: 175, averageRating: 2460 },
+    { uci: 'g1f3', san: 'Nf3',  white: 100, draws:  35, black:  80, averageRating: 2450 },
+    { uci: 'c1f4', san: 'Bf4',  white:  80, draws:  28, black:  65, averageRating: 2445 },
+  ],
+  'd2d4,c7c5': [
+    { uci: 'd4c5', san: 'dxc5', white: 100, draws:  35, black:  82, averageRating: 2450 },
+    { uci: 'g1f3', san: 'Nf3',  white:  90, draws:  30, black:  74, averageRating: 2450 },
+    { uci: 'c2c3', san: 'c3',   white:  50, draws:  18, black:  42, averageRating: 2445 },
+  ],
+  'e2e4,e7e5,g1f3': [
+    { uci: 'b8c6', san: 'Nc6',  white: 180, draws:  60, black: 145, averageRating: 2460 },
+    { uci: 'g8f6', san: 'Nf6',  white: 100, draws:  35, black:  80, averageRating: 2455 },
+    { uci: 'd7d6', san: 'd6',   white:  80, draws:  28, black:  65, averageRating: 2445 },
+  ],
+  'e2e4,e7e5,b1c3': [
+    { uci: 'b8c6', san: 'Nc6',  white: 100, draws:  35, black:  80, averageRating: 2455 },
+    { uci: 'g8f6', san: 'Nf6',  white:  80, draws:  28, black:  65, averageRating: 2450 },
+    { uci: 'f8c5', san: 'Bc5',  white:  70, draws:  24, black:  58, averageRating: 2450 },
+  ],
+  'e2e4,e7e5,f1c4': [
+    { uci: 'g8f6', san: 'Nf6',  white: 100, draws:  35, black:  80, averageRating: 2455 },
+    { uci: 'f8c5', san: 'Bc5',  white:  90, draws:  30, black:  72, averageRating: 2450 },
+    { uci: 'b8c6', san: 'Nc6',  white:  80, draws:  28, black:  65, averageRating: 2445 },
+  ],
+  'e2e4,e7e5,g1f3,b8c6': [
+    { uci: 'f1b5', san: 'Bb5',  white: 160, draws:  55, black: 130, averageRating: 2465 },
+    { uci: 'f1c4', san: 'Bc4',  white: 120, draws:  40, black:  95, averageRating: 2455 },
+    { uci: 'd2d4', san: 'd4',   white:  80, draws:  28, black:  65, averageRating: 2450 },
+  ],
+  'e2e4,e7e5,g1f3,g8f6': [
+    { uci: 'f3e5', san: 'Nxe5', white: 100, draws:  35, black:  80, averageRating: 2460 },
+    { uci: 'b1c3', san: 'Nc3',  white:  80, draws:  28, black:  65, averageRating: 2455 },
+  ],
+  'e2e4,c7c5,g1f3': [
+    { uci: 'd7d6', san: 'd6',   white: 150, draws:  50, black: 120, averageRating: 2460 },
+    { uci: 'b8c6', san: 'Nc6',  white: 130, draws:  45, black: 105, averageRating: 2460 },
+    { uci: 'e7e6', san: 'e6',   white: 120, draws:  40, black:  95, averageRating: 2455 },
+  ],
+  'e2e4,e7e6,d2d4': [
+    { uci: 'd7d5', san: 'd5',   white: 180, draws:  60, black: 145, averageRating: 2455 },
+    { uci: 'b8c6', san: 'Nc6',  white:  60, draws:  20, black:  50, averageRating: 2445 },
+  ],
+  'e2e4,c7c6,d2d4': [
+    { uci: 'd7d5', san: 'd5',   white: 160, draws:  55, black: 130, averageRating: 2460 },
+    { uci: 'g7g6', san: 'g6',   white:  50, draws:  18, black:  42, averageRating: 2445 },
+  ],
+  'd2d4,d7d5,c2c4': [
+    { uci: 'e7e6', san: 'e6',   white: 180, draws:  65, black: 145, averageRating: 2465 },
+    { uci: 'c7c6', san: 'c6',   white: 160, draws:  55, black: 130, averageRating: 2460 },
+    { uci: 'd5c4', san: 'dxc4', white: 140, draws:  45, black: 110, averageRating: 2455 },
+  ],
+  'd2d4,g8f6,c2c4': [
+    { uci: 'e7e6', san: 'e6',   white: 160, draws:  55, black: 130, averageRating: 2460 },
+    { uci: 'g7g6', san: 'g6',   white: 140, draws:  48, black: 115, averageRating: 2460 },
+    { uci: 'c7c5', san: 'c5',   white: 100, draws:  35, black:  82, averageRating: 2455 },
+  ],
+  'e2e4,e7e5,g1f3,b8c6,f1b5': [
+    { uci: 'a7a6', san: 'a6',   white: 140, draws:  48, black: 115, averageRating: 2465 },
+    { uci: 'g8f6', san: 'Nf6',  white: 100, draws:  35, black:  80, averageRating: 2460 },
+    { uci: 'f8c5', san: 'Bc5',  white:  80, draws:  28, black:  65, averageRating: 2455 },
+  ],
+  'e2e4,e7e5,g1f3,b8c6,f1c4': [
+    { uci: 'f8c5', san: 'Bc5',  white: 130, draws:  45, black: 105, averageRating: 2460 },
+    { uci: 'g8f6', san: 'Nf6',  white: 100, draws:  35, black:  80, averageRating: 2455 },
+    { uci: 'd7d6', san: 'd6',   white:  70, draws:  24, black:  58, averageRating: 2450 },
+  ],
+  'e2e4,e7e5,g1f3,b8c6,d2d4': [
+    { uci: 'e5d4', san: 'exd4', white: 100, draws:  35, black:  80, averageRating: 2460 },
+    { uci: 'f8c5', san: 'Bc5',  white:  80, draws:  28, black:  65, averageRating: 2455 },
+  ],
+  'd2d4,d7d5,c2c4,e7e6': [
+    { uci: 'b1c3', san: 'Nc3',  white: 160, draws:  58, black: 130, averageRating: 2465 },
+    { uci: 'g1f3', san: 'Nf3',  white: 140, draws:  50, black: 115, averageRating: 2460 },
+  ],
+  'd2d4,d7d5,c2c4,c7c6': [
+    { uci: 'g1f3', san: 'Nf3',  white: 150, draws:  55, black: 120, averageRating: 2465 },
+    { uci: 'b1c3', san: 'Nc3',  white: 130, draws:  48, black: 105, averageRating: 2460 },
+  ],
+  'd2d4,g8f6,c2c4,e7e6': [
+    { uci: 'b1c3', san: 'Nc3',  white: 150, draws:  55, black: 120, averageRating: 2465 },
+    { uci: 'g1f3', san: 'Nf3',  white: 130, draws:  48, black: 105, averageRating: 2460 },
+  ],
+  'd2d4,g8f6,c2c4,g7g6': [
+    { uci: 'b1c3', san: 'Nc3',  white: 130, draws:  48, black: 105, averageRating: 2465 },
+    { uci: 'g1f3', san: 'Nf3',  white: 110, draws:  40, black:  88, averageRating: 2460 },
+  ],
 };
+
+// Opening name lookup by move-history key (for the "Opening" side-panel display)
+const POSITION_NAMES: Record<string, LichessOpening> = {
+  'e2e4':                            { name: "King's Pawn Opening",       eco: 'B00' },
+  'd2d4':                            { name: "Queen's Pawn Opening",      eco: 'D00' },
+  'g1f3':                            { name: 'Réti Opening',              eco: 'A04' },
+  'c2c4':                            { name: 'English Opening',           eco: 'A10' },
+  'e2e4,e7e5':                       { name: 'Open Game',                 eco: 'C20' },
+  'e2e4,c7c5':                       { name: 'Sicilian Defence',          eco: 'B20' },
+  'e2e4,e7e6':                       { name: 'French Defence',            eco: 'C00' },
+  'e2e4,c7c6':                       { name: 'Caro-Kann Defence',         eco: 'B10' },
+  'e2e4,d7d5':                       { name: 'Scandinavian Defence',      eco: 'B01' },
+  'd2d4,d7d5':                       { name: "Queen's Pawn Game",         eco: 'D00' },
+  'd2d4,g8f6':                       { name: 'Indian Defence',            eco: 'A45' },
+  'd2d4,f7f5':                       { name: 'Dutch Defence',             eco: 'A80' },
+  'd2d4,c7c5':                       { name: 'Old Benoni',                eco: 'A43' },
+  'e2e4,e7e5,g1f3':                  { name: "King's Knight Opening",     eco: 'C44' },
+  'e2e4,e7e5,b1c3':                  { name: 'Vienna Game',               eco: 'C25' },
+  'e2e4,e7e5,f1c4':                  { name: 'Bishop Opening',            eco: 'C24' },
+  'e2e4,e7e5,g1f3,b8c6':            { name: 'Three Knights Game',        eco: 'C46' },
+  'e2e4,e7e5,g1f3,g8f6':            { name: 'Petrov Defence',            eco: 'C42' },
+  'e2e4,c7c5,g1f3':                  { name: 'Sicilian Defence',          eco: 'B40' },
+  'e2e4,e7e6,d2d4':                  { name: 'French Defence',            eco: 'C00' },
+  'e2e4,c7c6,d2d4':                  { name: 'Caro-Kann Defence',         eco: 'B12' },
+  'd2d4,d7d5,c2c4':                  { name: "Queen's Gambit",            eco: 'D06' },
+  'd2d4,g8f6,c2c4':                  { name: 'Indian Defence',            eco: 'E00' },
+  'e2e4,e7e5,g1f3,b8c6,f1b5':       { name: 'Ruy Lopez',                 eco: 'C60' },
+  'e2e4,e7e5,g1f3,b8c6,f1c4':       { name: 'Italian Game',              eco: 'C50' },
+  'e2e4,e7e5,g1f3,b8c6,d2d4':       { name: 'Scotch Game',               eco: 'C44' },
+  'd2d4,d7d5,c2c4,e7e6':            { name: "Queen's Gambit Declined",   eco: 'D30' },
+  'd2d4,d7d5,c2c4,c7c6':            { name: 'Slav Defence',              eco: 'D10' },
+  'd2d4,d7d5,c2c4,d5c4':            { name: "Queen's Gambit Accepted",   eco: 'D20' },
+  'd2d4,g8f6,c2c4,e7e6':            { name: "Queen's Indian / Nimzo",    eco: 'E00' },
+  'd2d4,g8f6,c2c4,g7g6':            { name: "King's Indian Defence",     eco: 'E60' },
+  'e2e4,e7e5,g1f3,b8c6,f1b5,a7a6': { name: 'Ruy Lopez, Morphy Defence', eco: 'C60' },
+  'e2e4,e7e5,g1f3,b8c6,f1c4,f8c5': { name: 'Giuoco Piano',             eco: 'C50' },
+  'e2e4,e7e5,g1f3,b8c6,f1c4,g8f6': { name: 'Two Knights Defence',      eco: 'C55' },
+};
+
+// Single-move labels used as fallback for opening cards
+const KNOWN_OPENINGS: Record<string, { name: string; eco: string }> = {
+  'e2e4': { name: "King's Pawn",    eco: 'B00' },
+  'd2d4': { name: "Queen's Pawn",   eco: 'D00' },
+  'g1f3': { name: 'Réti',          eco: 'A04' },
+  'c2c4': { name: 'English',       eco: 'A10' },
+  'b1c3': { name: 'Van Geet',      eco: 'A00' },
+  'e7e5': { name: 'Open Game',     eco: 'C20' },
+  'c7c5': { name: 'Sicilian',      eco: 'B20' },
+  'e7e6': { name: 'French',        eco: 'C00' },
+  'c7c6': { name: 'Caro-Kann',     eco: 'B10' },
+  'd7d5': { name: 'Scandinavian',  eco: 'B01' },
+  'g8f6': { name: 'Indian Def.',   eco: 'A45' },
+  'f7f5': { name: 'Dutch Def.',    eco: 'A80' },
+  'f1b5': { name: 'Ruy Lopez',     eco: 'C60' },
+  'f1c4': { name: 'Italian Game',  eco: 'C50' },
+  'b8c6': { name: 'Classical',     eco: 'C46' },
+  'f8c5': { name: 'Giuoco Piano',  eco: 'C50' },
+  'a7a6': { name: 'Morphy Def.',   eco: 'C60' },
+};
+
+// Returns the opening name for the current position from local data
+const getLocalOpening = (history: string[]): LichessOpening | null => {
+  for (let len = history.length; len > 0; len--) {
+    const key = history.slice(0, len).join(',');
+    if (POSITION_NAMES[key]) return POSITION_NAMES[key];
+  }
+  return null;
+};
+
+// Returns fallback moves for a position, or [] if unknown
+const getFallbackMoves = (history: string[]): LichessMove[] =>
+  FALLBACK_POSITIONS[history.join(',')] ?? [];
 
 // ── Opening card colours (red / green / blue) ─────────────────────────────────
 const CARD_COLORS = ['#ef4444', '#22c55e', '#3b82f6'] as const;
@@ -157,13 +350,15 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
   const buildOpeningCards = (moves: LichessMove[], historyAtPoint: string[]) => {
     const top3 = moves.slice(0, 3);
     const cards: OpeningCard[] = top3.map(m => {
-      const known = KNOWN_OPENINGS[m.uci];
+      // Prefer the full-position name (context-aware), fall back to single-move label
+      const resultKey = [...historyAtPoint, m.uci].join(',');
+      const nameEntry = POSITION_NAMES[resultKey] ?? KNOWN_OPENINGS[m.uci] ?? null;
       return {
         uci: m.uci,
         san: m.san,
         games: gameCount(m),
-        openingName: known?.name ?? null,
-        eco: known?.eco ?? null,
+        openingName: nameEntry?.name ?? null,
+        eco: nameEntry?.eco ?? null,
       };
     });
     setOpeningCards(cards);
@@ -239,16 +434,29 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
         setPhase('player');
       }
     } catch {
-      // API unavailable — use fallback data so the trainer is still usable
+      // API unavailable — use fallback data so the trainer is always playable
       if (color === 'white') {
-        const total = FALLBACK_START.reduce((s, m) => s + gameCount(m), 0);
-        setBookMoves(FALLBACK_START);
+        const fallback = getFallbackMoves([]);
+        const total = fallback.reduce((s, m) => s + gameCount(m), 0);
+        setBookMoves(fallback.slice(0, 5));
         setPositionTotal(total);
-        buildOpeningCards(FALLBACK_START, []);
+        buildOpeningCards(fallback, []);
         setPhase('player');
       } else {
-        // Can't have the bot open for black without the API; fall back to free play
-        setPhase('free');
+        // Bot (white) plays e4 as opening move from fallback
+        const botMove = FALLBACK_POSITIONS[''][0];
+        const { from, to } = uciToMove(botMove.uci);
+        const r = doMove(createInitialBoard(), from, to, DEFAULT_CASTLING_RIGHTS, null, 'white');
+        const h = [botMove.uci];
+        flush(r.board, r.player, r.enPassant, r.castling, h);
+        const local = getLocalOpening(h);
+        if (local) setOpening(local);
+        const playerOptions = getFallbackMoves(h);
+        const total = playerOptions.reduce((s, m) => s + gameCount(m), 0);
+        setBookMoves(playerOptions.slice(0, 5));
+        setPositionTotal(total);
+        buildOpeningCards(playerOptions, h);
+        setPhase('player');
       }
     }
   };
@@ -399,65 +607,101 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
     const promo = movingPiece.type === 'pawn' && (pos.row === 0 || pos.row === 7) ? 'q' : undefined;
     const uci = moveToUci(from, pos, promo);
 
+    // Capture current state snapshots — these stay stable across awaits
+    const snapBoard = board;
+    const snapCastling = castling;
+    const snapEnPassant = enPassant;
+    const snapPlayer = currentPlayer;
+    const snapHistory = moveHistory;
+
+    const r = doMove(snapBoard, from, pos, snapCastling, snapEnPassant, snapPlayer);
+    const h = [...snapHistory, uci];
+
     setPhase('thinking');
 
+    // ── Block 1: Book verification (failure = skip check, assume valid) ────────
     try {
-      // Verify the move against the book
-      const data = await fetchPosition(moveHistory);
-      const bookMove = data.moves.find(m => m.uci === uci);
-
-      if (data.moves.length > 0 && !bookMove) {
-        // Off-book: freeze board, show the main line move
+      const data = await fetchPosition(snapHistory);
+      if (data.moves.length > 0 && !data.moves.find(m => m.uci === uci)) {
         pendingMove.current = { from, to: pos, uci };
         setCorrection(data.moves[0].san);
         setPhase('off-book');
         return;
       }
-
-      // Good move — apply it
-      const r = doMove(board, from, pos, castling, enPassant, currentPlayer);
-      const h = [...moveHistory, uci];
-      flush(r.board, r.player, r.enPassant, r.castling, h);
       if (data.opening) setOpening(data.opening);
+    } catch {
+      const local = getLocalOpening(h);
+      if (local) setOpening(local);
+    }
 
-      // Fetch bot's response options
+    // Commit user's move regardless of what comes next
+    flush(r.board, r.player, r.enPassant, r.castling, h);
+    setSelectedCardUci(null);
+    setMovePreviews([]);
+
+    // Hard cap at 14 plies (7 moves each side)
+    if (h.length >= 14) {
+      setBookMoves([]); setOpeningCards([]); setPhase('free');
+      return;
+    }
+
+    // ── Block 2: Bot response (failure = try fallback, else go free) ──────────
+    let botMoveData: LichessMove | null = null;
+    try {
       const botData = await fetchPosition(h);
       if (botData.opening) setOpening(botData.opening);
+      botMoveData = botData.moves[0] ?? null;
+    } catch {
+      const fallback = getFallbackMoves(h);
+      botMoveData = fallback[0] ?? null;
+    }
 
-      if (botData.moves.length === 0) {
-        setBookMoves([]);
-        setOpeningCards([]);
-        setMovePreviews([]);
-        setPhase('free');
-        return;
-      }
+    let bh = h;
+    let bBoard = r.board;
+    let bCastling = r.castling;
+    let bEnPassant = r.enPassant;
+    let bPlayer = r.player;
 
-      // Short pause so the player can see their move land
+    if (botMoveData) {
       await new Promise(res => setTimeout(res, 420));
-
-      // Bot plays the most popular book continuation
-      const botMove = botData.moves[0];
-      const { from: bf, to: bt } = uciToMove(botMove.uci);
-      const br = doMove(r.board, bf, bt, r.castling, r.enPassant, r.player);
-      const bh = [...h, botMove.uci];
+      const { from: bf, to: bt } = uciToMove(botMoveData.uci);
+      const br = doMove(bBoard, bf, bt, bCastling, bEnPassant, bPlayer);
+      bh = [...h, botMoveData.uci];
+      bBoard = br.board; bCastling = br.castling; bEnPassant = br.enPassant; bPlayer = br.player;
       flush(br.board, br.player, br.enPassant, br.castling, bh);
+      const local = getLocalOpening(bh);
+      if (local) setOpening(local);
+    } else {
+      // No bot response at all — end of book
+      setBookMoves([]); setOpeningCards([]); setMovePreviews([]); setPhase('free');
+      return;
+    }
 
-      // Fetch player's options for the next turn
+    // ── Block 3: Player's next options (failure = try fallback, stay in player) ─
+    try {
       const nextData = await fetchPosition(bh);
       if (nextData.opening) setOpening(nextData.opening);
+      if (nextData.moves.length === 0) {
+        setBookMoves([]); setOpeningCards([]); setMovePreviews([]); setPhase('free');
+        return;
+      }
       setBookMoves(nextData.moves.slice(0, 5));
       setPositionTotal(nextData.white + nextData.draws + nextData.black);
       buildOpeningCards(nextData.moves, bh);
       setPhase('player');
-
     } catch {
-      // API failure — apply the move and fall back to free play
-      const r = doMove(board, from, pos, castling, enPassant, currentPlayer);
-      flush(r.board, r.player, r.enPassant, r.castling, [...moveHistory, uci]);
-      setBookMoves([]);
-      setOpeningCards([]);
-      setMovePreviews([]);
-      setPhase('free');
+      const fallback = getFallbackMoves(bh);
+      if (fallback.length > 0) {
+        const total = fallback.reduce((s, m) => s + gameCount(m), 0);
+        setBookMoves(fallback.slice(0, 5));
+        setPositionTotal(total);
+        buildOpeningCards(fallback, bh);
+        setPhase('player');
+      } else {
+        // No data for this position — keep playing without cards
+        setBookMoves([]); setOpeningCards([]); setMovePreviews([]);
+        setPhase('player');
+      }
     }
   }, [board, selected, currentPlayer, playerColor, phase, enPassant, castling, moveHistory, openingCards]);
 
