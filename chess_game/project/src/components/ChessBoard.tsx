@@ -6,10 +6,8 @@ interface ChessBoardProps {
   selectedPosition: Position | null;
   validMoves: Position[];
   onSquareClick: (position: Position) => void;
+  flipped?: boolean;
 }
-
-const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
-const RANKS = ['8', '7', '6', '5', '4', '3', '2', '1'];
 
 const PIECE_SYMBOLS: Record<string, string> = {
   'white-king': '♔', 'white-queen': '♕', 'white-rook': '♖',
@@ -18,9 +16,16 @@ const PIECE_SYMBOLS: Record<string, string> = {
   'black-bishop': '♝', 'black-knight': '♞', 'black-pawn': '♟',
 };
 
-const SQ = 72; // square size in px
+const SQ = 72;
 
-const ChessBoard: React.FC<ChessBoardProps> = ({ board, selectedPosition, validMoves, onSquareClick }) => {
+const ChessBoard: React.FC<ChessBoardProps> = ({
+  board, selectedPosition, validMoves, onSquareClick, flipped = false,
+}) => {
+  const rows = flipped ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7];
+  const cols = flipped ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7];
+  const rankLabels = flipped ? ['1','2','3','4','5','6','7','8'] : ['8','7','6','5','4','3','2','1'];
+  const fileLabels = flipped ? ['H','G','F','E','D','C','B','A'] : ['A','B','C','D','E','F','G','H'];
+
   const isSelected = (r: number, c: number) =>
     selectedPosition?.row === r && selectedPosition?.col === c;
 
@@ -31,9 +36,9 @@ const ChessBoard: React.FC<ChessBoardProps> = ({ board, selectedPosition, validM
     <div className="flex select-none">
       {/* Rank labels */}
       <div className="flex flex-col pr-1.5">
-        {RANKS.map(rank => (
+        {rankLabels.map((rank, i) => (
           <div
-            key={rank}
+            key={i}
             className="flex items-center justify-center text-gray-400 text-xs font-mono"
             style={{ width: 14, height: SQ }}
           >
@@ -48,8 +53,9 @@ const ChessBoard: React.FC<ChessBoardProps> = ({ board, selectedPosition, validM
           className="grid grid-cols-8 border-2 border-gray-600 shadow-2xl"
           style={{ width: SQ * 8, height: SQ * 8 }}
         >
-          {board.map((row, rowIdx) =>
-            row.map((piece, colIdx) => {
+          {rows.map(rowIdx =>
+            cols.map(colIdx => {
+              const piece = board[rowIdx][colIdx];
               const light = (rowIdx + colIdx) % 2 === 0;
               const selected = isSelected(rowIdx, colIdx);
               const target = isTarget(rowIdx, colIdx);
@@ -75,7 +81,6 @@ const ChessBoard: React.FC<ChessBoardProps> = ({ board, selectedPosition, validM
                   className="flex items-center justify-center cursor-pointer relative"
                   onClick={() => onSquareClick({ row: rowIdx, col: colIdx })}
                 >
-                  {/* Move dot for empty squares */}
                   {target && !capture && (
                     <div
                       className="absolute rounded-full pointer-events-none"
@@ -105,9 +110,9 @@ const ChessBoard: React.FC<ChessBoardProps> = ({ board, selectedPosition, validM
 
         {/* File labels */}
         <div className="flex pt-1">
-          {FILES.map(file => (
+          {fileLabels.map((file, i) => (
             <div
-              key={file}
+              key={i}
               className="text-gray-400 text-xs font-mono text-center"
               style={{ width: SQ }}
             >

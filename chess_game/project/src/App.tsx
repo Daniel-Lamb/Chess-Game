@@ -17,6 +17,15 @@ import OpeningTrainer from './components/OpeningTrainer';
 type AppMode = 'play' | 'train';
 type GameStatus = 'playing' | 'check' | 'checkmate' | 'stalemate';
 
+interface Snapshot {
+  board: Board;
+  currentPlayer: 'white' | 'black';
+  gameStatus: GameStatus;
+  winner: string | null;
+  enPassantTarget: Position | null;
+  castlingRights: CastlingRights;
+}
+
 function App() {
   const [mode, setMode] = useState<AppMode>('play');
 
@@ -30,6 +39,8 @@ function App() {
   const [moveCount, setMoveCount] = useState(0);
   const [enPassantTarget, setEnPassantTarget] = useState<Position | null>(null);
   const [castlingRights, setCastlingRights] = useState<CastlingRights>(DEFAULT_CASTLING_RIGHTS);
+  const [history, setHistory] = useState<Snapshot[]>([]);
+  const [flipped, setFlipped] = useState(false);
 
   const resetGame = () => {
     setBoard(createInitialBoard());
@@ -41,6 +52,22 @@ function App() {
     setMoveCount(0);
     setEnPassantTarget(null);
     setCastlingRights(DEFAULT_CASTLING_RIGHTS);
+    setHistory([]);
+  };
+
+  const undo = () => {
+    if (history.length === 0) return;
+    const snap = history[history.length - 1];
+    setBoard(snap.board);
+    setCurrentPlayer(snap.currentPlayer);
+    setGameStatus(snap.gameStatus);
+    setWinner(snap.winner);
+    setEnPassantTarget(snap.enPassantTarget);
+    setCastlingRights(snap.castlingRights);
+    setMoveCount(history.length - 1);
+    setSelectedPosition(null);
+    setValidMoves([]);
+    setHistory(prev => prev.slice(0, -1));
   };
 
   const handleSquareClick = useCallback(
@@ -106,6 +133,7 @@ function App() {
           newStatus = inCheck ? 'check' : 'playing';
         }
 
+        setHistory(prev => [...prev, { board, currentPlayer, gameStatus, winner, enPassantTarget, castlingRights }]);
         setBoard(newBoard);
         setCurrentPlayer(nextPlayer);
         setGameStatus(newStatus);
@@ -117,7 +145,7 @@ function App() {
       setSelectedPosition(null);
       setValidMoves([]);
     },
-    [board, selectedPosition, currentPlayer, gameStatus, enPassantTarget, castlingRights],
+    [board, selectedPosition, currentPlayer, gameStatus, winner, enPassantTarget, castlingRights],
   );
 
   const statusMessage = () => {
@@ -186,12 +214,26 @@ function App() {
               selectedPosition={selectedPosition}
               validMoves={validMoves}
               onSquareClick={handleSquareClick}
+              flipped={flipped}
             />
 
-            <div className="mt-5 text-center">
+            <div className="mt-5 flex gap-2 justify-center flex-wrap">
+              <button
+                onClick={undo}
+                disabled={history.length === 0}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-lg transition-colors duration-150 shadow text-sm"
+              >
+                ↩ Undo
+              </button>
+              <button
+                onClick={() => setFlipped(f => !f)}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white font-semibold rounded-lg transition-colors duration-150 shadow text-sm"
+              >
+                ⇅ Flip Board
+              </button>
               <button
                 onClick={resetGame}
-                className="px-6 py-2 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-semibold rounded-lg transition-colors duration-150 shadow"
+                className="px-5 py-2 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-semibold rounded-lg transition-colors duration-150 shadow text-sm"
               >
                 New Game
               </button>
