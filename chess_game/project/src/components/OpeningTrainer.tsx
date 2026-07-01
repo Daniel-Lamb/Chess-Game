@@ -10,9 +10,26 @@ import {
 } from '../utils/chessLogic';
 import { moveToUci, uciToMove } from '../utils/uciUtils';
 import { fetchPosition, LichessMove, LichessOpening, gameCount } from '../utils/lichessApi';
-import ChessBoard from './ChessBoard';
+import ChessBoard, { MovePreview } from './ChessBoard';
 
 type Phase = 'setup' | 'player' | 'thinking' | 'off-book' | 'free';
+
+// ── Opening card colours (red / green / blue) ─────────────────────────────────
+const CARD_COLORS = ['#ef4444', '#22c55e', '#3b82f6'] as const;
+type CardColorIdx = 0 | 1 | 2;
+
+const CARD_BORDER = ['border-red-700', 'border-green-700', 'border-blue-700'] as const;
+const CARD_BG    = ['bg-red-900/20', 'bg-green-900/20', 'bg-blue-900/20'] as const;
+const CARD_LABEL = ['text-red-400', 'text-green-400', 'text-blue-400'] as const;
+const CARD_DOT   = ['bg-red-500', 'bg-green-500', 'bg-blue-500'] as const;
+
+interface OpeningCard {
+  uci: string;
+  san: string;
+  games: number;
+  openingName: string | null;
+  eco: string | null;
+}
 
 // Applies a move (+ castling / en passant / promotion side effects) and returns updated state.
 const doMove = (
@@ -69,6 +86,11 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
   const [positionTotal, setPositionTotal] = useState(0);
   const [correction, setCorrection] = useState<string | null>(null);
 
+  // ── Opening card explorer state ───────────────────────────────────────────
+  const [openingCards, setOpeningCards] = useState<OpeningCard[]>([]);
+  const [selectedCardUci, setSelectedCardUci] = useState<string | null>(null);
+  const [movePreviews, setMovePreviews] = useState<MovePreview[]>([]);
+
   // Pending off-book move so "Continue anyway" can apply it
   const pendingMove = useRef<{ from: Position; to: Position; uci: string } | null>(null);
 
@@ -96,7 +118,59 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
     setBookMoves([]);
     setPositionTotal(0);
     setCorrection(null);
+    setOpeningCards([]);
+    setSelectedCardUci(null);
+    setMovePreviews([]);
     pendingMove.current = null;
+  };
+
+  // ── Opening cards builder ─────────────────────────────────────────────────
+  // Builds top-3 cards from the given moves and asynchronously enriches them
+  // with opening names by fetching one move deeper.
+  const buildOpeningCards = (moves: LichessMove[], historyAtPoint: string[]) => {
+    const top3 = moves.slice(0, 3);
+    const cards: OpeningCard[] = top3.map(m => ({
+      uci: m.uci,
+      san: m.san,
+      games: gameCount(m),
+      openingName: null,
+      eco: null,
+    }));
+    setOpeningCards(cards);
+    setSelectedCardUci(null);
+
+    // Show destination squares for all 3 cards as coloured dots on the board
+    const initialPreviews: MovePreview[] = top3.map((m, i) => ({
+      to: uciToMove(m.uci).to,
+      color: CARD_COLORS[i as CardColorIdx],
+      san: m.san,
+    }));
+    setMovePreviews(initialPreviews);
+
+    // Background-fetch the opening name for each card
+    top3.forEach(async (move) => {
+      try {
+        const data = await fetchPosition([...historyAtPoint, move.uci]);
+        if (data.opening) {
+          setOpeningCards(prev => prev.map(c =>
+            c.uci === move.uci
+              ? { ...c, openingName: data.opening!.name, eco: data.opening!.eco }
+              : c
+          ));
+        }
+      } catch { /* silently skip */ }
+    });
+  };
+
+  // Reverts movePreviews back to the initial "3 destination dots" state
+  const revertPreviews = (cards: OpeningCard[]) => {
+    setMovePreviews(
+      cards.slice(0, 3).map((c, i) => ({
+        to: uciToMove(c.uci).to,
+        color: CARD_COLORS[i as CardColorIdx],
+        san: c.san,
+      }))
+    );
   };
 
   // ── Color selection + initial book fetch ──────────────────────────────────
@@ -122,14 +196,16 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
         setBookMoves(playerData.moves.slice(0, 5));
         setPositionTotal(playerData.white + playerData.draws + playerData.black);
         if (playerData.opening) setOpening(playerData.opening);
+        buildOpeningCards(playerData.moves, h);
         setPhase('player');
       } else if (color === 'black') {
-        // No bot moves available — fall back to free play as black isn't possible
+        // API returned no moves — fall back to free play
         setPhase('free');
       } else {
         setBookMoves(data.moves.slice(0, 5));
         setPositionTotal(data.white + data.draws + data.black);
         if (data.opening) setOpening(data.opening);
+        buildOpeningCards(data.moves, []);
         setPhase('player');
       }
     } catch {
@@ -156,8 +232,51 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
     pendingMove.current = null;
     setCorrection(null);
     setBookMoves([]);
+    setOpeningCards([]);
+    setSelectedCardUci(null);
+    setMovePreviews([]);
     setPhase('free');
   }, [board, castling, enPassant, currentPlayer, moveHistory]);
+
+  // ── Card selection ────────────────────────────────────────────────────────
+
+  const handleCardSelect = useCallback(async (card: OpeningCard, cardIdx: number) => {
+    // Toggle off if already selected
+    if (selectedCardUci === card.uci) {
+      setSelectedCardUci(null);
+      setSelected(null);
+      setHighlights([]);
+      revertPreviews(openingCards);
+      return;
+    }
+
+    setSelectedCardUci(card.uci);
+
+    // Auto-select the piece on the FROM square so the user sees its valid moves
+    const { from } = uciToMove(card.uci);
+    setSelected(from);
+    setHighlights(getValidMoves(board, from, currentPlayer, enPassant, castling));
+
+    // Show the card's own destination while we fetch continuations
+    setMovePreviews([{
+      to: uciToMove(card.uci).to,
+      color: CARD_COLORS[cardIdx as CardColorIdx],
+      san: card.san,
+    }]);
+
+    // Fetch top-3 continuations after this card's move (opponent responses)
+    try {
+      const data = await fetchPosition([...moveHistory, card.uci]);
+      const top3 = data.moves.slice(0, 3);
+      setMovePreviews(top3.map((resp, i) => ({
+        to: uciToMove(resp.uci).to,
+        color: CARD_COLORS[i as CardColorIdx],
+        san: resp.san,
+      })));
+    } catch {
+      setMovePreviews([]);
+    }
+  }, [selectedCardUci, openingCards, board, currentPlayer, enPassant, castling, moveHistory]);
 
   // ── Square click ──────────────────────────────────────────────────────────
 
@@ -206,18 +325,26 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
       if (piece && piece.color === currentPlayer) {
         setSelected(pos);
         setHighlights(getValidMoves(board, pos, currentPlayer, enPassant, castling));
+        // Clear card selection when user manually picks a piece
+        setSelectedCardUci(null);
+        revertPreviews(openingCards);
       }
       return;
     }
 
     if (selected.row === pos.row && selected.col === pos.col) {
-      setSelected(null); setHighlights([]); return;
+      setSelected(null); setHighlights([]);
+      setSelectedCardUci(null);
+      revertPreviews(openingCards);
+      return;
     }
 
     const clickedPiece = board[pos.row][pos.col];
     if (clickedPiece && clickedPiece.color === currentPlayer) {
       setSelected(pos);
       setHighlights(getValidMoves(board, pos, currentPlayer, enPassant, castling));
+      setSelectedCardUci(null);
+      revertPreviews(openingCards);
       return;
     }
 
@@ -225,6 +352,8 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
     const isLegal = getValidMoves(board, from, currentPlayer, enPassant, castling)
       .some(m => m.row === pos.row && m.col === pos.col);
     setSelected(null); setHighlights([]);
+    setSelectedCardUci(null);
+    setMovePreviews([]);
     if (!isLegal) return;
 
     const movingPiece = board[from.row][from.col]!;
@@ -258,6 +387,8 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
 
       if (botData.moves.length === 0) {
         setBookMoves([]);
+        setOpeningCards([]);
+        setMovePreviews([]);
         setPhase('free');
         return;
       }
@@ -277,6 +408,7 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
       if (nextData.opening) setOpening(nextData.opening);
       setBookMoves(nextData.moves.slice(0, 5));
       setPositionTotal(nextData.white + nextData.draws + nextData.black);
+      buildOpeningCards(nextData.moves, bh);
       setPhase('player');
 
     } catch {
@@ -284,9 +416,11 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
       const r = doMove(board, from, pos, castling, enPassant, currentPlayer);
       flush(r.board, r.player, r.enPassant, r.castling, [...moveHistory, uci]);
       setBookMoves([]);
+      setOpeningCards([]);
+      setMovePreviews([]);
       setPhase('free');
     }
-  }, [board, selected, currentPlayer, playerColor, phase, enPassant, castling, moveHistory]);
+  }, [board, selected, currentPlayer, playerColor, phase, enPassant, castling, moveHistory, openingCards]);
 
   // ── Setup screen ──────────────────────────────────────────────────────────
 
@@ -342,10 +476,11 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
         validMoves={highlights}
         onSquareClick={handleSquareClick}
         flipped={playerColor === 'black'}
+        movePreviews={movePreviews}
       />
 
       {/* Side panel */}
-      <div className="w-52 flex flex-col gap-3 shrink-0">
+      <div className="w-56 flex flex-col gap-3 shrink-0">
 
         {/* Opening name */}
         <div className="bg-gray-800 rounded-lg p-3">
@@ -407,31 +542,78 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
           </div>
         )}
 
-        {/* Book continuations — shown when it's the player's turn */}
-        {phase === 'player' && bookMoves.length > 0 && (
+        {/* ── Opening card explorer ─────────────────────────────────────── */}
+        {phase === 'player' && openingCards.length > 0 && (
           <div className="bg-gray-800 rounded-lg p-3">
             <div className="text-xs text-gray-500 uppercase tracking-wider mb-2">
-              Book moves
+              Continuations
             </div>
-            {bookMoves.map(m => {
-              const pct = positionTotal > 0
-                ? Math.round((gameCount(m) / positionTotal) * 100)
-                : 0;
-              return (
-                <div key={m.uci} className="mb-2.5 last:mb-0">
-                  <div className="flex justify-between items-baseline mb-1">
-                    <span className="text-white text-sm font-mono font-semibold">{m.san}</span>
-                    <span className="text-gray-400 text-xs">{pct}%</span>
+            <div className="flex flex-col gap-1.5">
+              {openingCards.map((card, i) => {
+                const isSelected = selectedCardUci === card.uci;
+                const pct = positionTotal > 0
+                  ? Math.round((card.games / positionTotal) * 100)
+                  : 0;
+
+                return (
+                  <div
+                    key={card.uci}
+                    onClick={() => handleCardSelect(card, i)}
+                    className={`rounded-lg border p-2 cursor-pointer transition-all ${
+                      isSelected
+                        ? `${CARD_BG[i as CardColorIdx]} ${CARD_BORDER[i as CardColorIdx]}`
+                        : 'border-gray-700 hover:border-gray-500 hover:bg-gray-700/40'
+                    }`}
+                  >
+                    {/* Header row */}
+                    <div className="flex items-center gap-1.5">
+                      <div className={`w-2 h-2 rounded-full shrink-0 ${CARD_DOT[i as CardColorIdx]}`} />
+                      <span className="text-white font-mono text-sm font-bold">{card.san}</span>
+                      <span className="text-gray-500 text-xs ml-auto">{pct}%</span>
+                    </div>
+
+                    {/* Opening name */}
+                    <div className="mt-0.5 pl-3.5">
+                      {card.openingName ? (
+                        <span className={`text-xs ${CARD_LABEL[i as CardColorIdx]} leading-tight`}>
+                          {card.eco ? <span className="font-mono mr-1 opacity-75">{card.eco}</span> : null}
+                          {card.openingName}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-gray-600 animate-pulse">Loading…</span>
+                      )}
+                    </div>
+
+                    {/* Continuations shown when this card is selected */}
+                    {isSelected && (
+                      <div className="mt-2 pt-2 border-t border-gray-700/60">
+                        <div className="text-xs text-gray-500 mb-1.5">Top responses:</div>
+                        {movePreviews.length > 0 ? (
+                          <div className="flex flex-col gap-1">
+                            {movePreviews.map((p, j) => (
+                              <div key={j} className="flex items-center gap-1.5">
+                                <div
+                                  className="w-2 h-2 rounded-full shrink-0"
+                                  style={{ backgroundColor: p.color }}
+                                />
+                                <span
+                                  className="font-mono text-xs font-semibold"
+                                  style={{ color: p.color }}
+                                >
+                                  {p.san}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-gray-600 animate-pulse">Fetching…</span>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  <div className="w-full bg-gray-700 rounded-full h-1">
-                    <div
-                      className="bg-blue-500 h-1 rounded-full transition-all"
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         )}
 

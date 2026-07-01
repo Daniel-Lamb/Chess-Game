@@ -1,12 +1,19 @@
 import React from 'react';
 import { Board, Position } from '../types/chess';
 
+export interface MovePreview {
+  to: Position;
+  color: string;
+  san: string;
+}
+
 interface ChessBoardProps {
   board: Board;
   selectedPosition: Position | null;
   validMoves: Position[];
   onSquareClick: (position: Position) => void;
   flipped?: boolean;
+  movePreviews?: MovePreview[];
 }
 
 const PIECE_SYMBOLS: Record<string, string> = {
@@ -19,7 +26,7 @@ const PIECE_SYMBOLS: Record<string, string> = {
 const SQ = 72;
 
 const ChessBoard: React.FC<ChessBoardProps> = ({
-  board, selectedPosition, validMoves, onSquareClick, flipped = false,
+  board, selectedPosition, validMoves, onSquareClick, flipped = false, movePreviews,
 }) => {
   const rows = flipped ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7];
   const cols = flipped ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7];
@@ -73,6 +80,7 @@ const ChessBoard: React.FC<ChessBoardProps> = ({
               }
 
               const symbol = piece ? PIECE_SYMBOLS[`${piece.color}-${piece.type}`] : null;
+              const preview = movePreviews?.find(p => p.to.row === rowIdx && p.to.col === colIdx);
 
               return (
                 <div
@@ -85,6 +93,18 @@ const ChessBoard: React.FC<ChessBoardProps> = ({
                     <div
                       className="absolute rounded-full pointer-events-none"
                       style={{ width: SQ * 0.31, height: SQ * 0.31, backgroundColor: 'rgba(0,0,0,0.18)' }}
+                    />
+                  )}
+                  {preview && (
+                    <div
+                      className="absolute rounded-full pointer-events-none"
+                      style={{
+                        width: SQ * 0.38,
+                        height: SQ * 0.38,
+                        backgroundColor: preview.color,
+                        opacity: 0.72,
+                        boxShadow: `0 0 6px 2px ${preview.color}`,
+                      }}
                     />
                   )}
                   {symbol && (
