@@ -122,16 +122,20 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
         setBookMoves(playerData.moves.slice(0, 5));
         setPositionTotal(playerData.white + playerData.draws + playerData.black);
         if (playerData.opening) setOpening(playerData.opening);
+        setPhase('player');
+      } else if (color === 'black') {
+        // No bot moves available — fall back to free play as black isn't possible
+        setPhase('free');
       } else {
         setBookMoves(data.moves.slice(0, 5));
         setPositionTotal(data.white + data.draws + data.black);
         if (data.opening) setOpening(data.opening);
+        setPhase('player');
       }
     } catch {
-      // API unavailable — fall straight into free play
+      // API unavailable — fall back to free play (board stays flipped for black)
+      setPhase('free');
     }
-
-    setPhase('player');
   };
 
   // ── Off-book actions ──────────────────────────────────────────────────────
@@ -337,6 +341,7 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
         selectedPosition={selected}
         validMoves={highlights}
         onSquareClick={handleSquareClick}
+        flipped={playerColor === 'black'}
       />
 
       {/* Side panel */}

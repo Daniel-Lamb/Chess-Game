@@ -23,7 +23,9 @@ export interface LichessData {
 export const fetchPosition = async (moves: string[]): Promise<LichessData> => {
   const params = new URLSearchParams({ topGames: '0', recentGames: '0' });
   if (moves.length > 0) params.set('play', moves.join(','));
-  const res = await fetch(`https://explorer.lichess.ovh/masters?${params}`);
+  const res = await fetch(`https://explorer.lichess.ovh/masters?${params}`, {
+    signal: AbortSignal.timeout(6000),
+  });
   if (!res.ok) throw new Error(`Lichess API ${res.status}`);
   return res.json();
 };
