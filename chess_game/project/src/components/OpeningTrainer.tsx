@@ -14,6 +14,33 @@ import ChessBoard, { MovePreview } from './ChessBoard';
 
 type Phase = 'setup' | 'player' | 'thinking' | 'off-book' | 'free';
 
+// ── Static fallback data for the starting position ────────────────────────────
+// Used when the Lichess API is unavailable so the trainer is always interactive.
+const FALLBACK_START: LichessMove[] = [
+  { uci: 'e2e4', san: 'e4',  white: 400, draws: 100, black: 280, averageRating: 2450 },
+  { uci: 'd2d4', san: 'd4',  white: 340, draws:  95, black: 230, averageRating: 2455 },
+  { uci: 'g1f3', san: 'Nf3', white: 100, draws:  28, black:  70, averageRating: 2445 },
+];
+
+// Known opening names for common first moves — fills cards instantly without API
+const KNOWN_OPENINGS: Record<string, { name: string; eco: string }> = {
+  'e2e4': { name: "King's Pawn Opening",  eco: 'B00' },
+  'd2d4': { name: "Queen's Pawn Opening", eco: 'D00' },
+  'g1f3': { name: 'Réti Opening',         eco: 'A04' },
+  'c2c4': { name: 'English Opening',      eco: 'A10' },
+  'b1c3': { name: "Van Geet Opening",     eco: 'A00' },
+  // responses to e4
+  'e7e5': { name: 'Open Game',            eco: 'C20' },
+  'c7c5': { name: 'Sicilian Defence',     eco: 'B20' },
+  'e7e6': { name: 'French Defence',       eco: 'C00' },
+  'c7c6': { name: 'Caro-Kann Defence',    eco: 'B10' },
+  'd7d5': { name: 'Scandinavian Defence', eco: 'B01' },
+  // responses to d4
+  'd7d5': { name: "Queen's Pawn Game",    eco: 'D00' },
+  'g8f6': { name: 'Indian Defence',       eco: 'A45' },
+  'f7f5': { name: 'Dutch Defence',        eco: 'A80' },
+};
+
 // ── Opening card colours (red / green / blue) ─────────────────────────────────
 const CARD_COLORS = ['#ef4444', '#22c55e', '#3b82f6'] as const;
 type CardColorIdx = 0 | 1 | 2;
@@ -129,13 +156,16 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
   // with opening names by fetching one move deeper.
   const buildOpeningCards = (moves: LichessMove[], historyAtPoint: string[]) => {
     const top3 = moves.slice(0, 3);
-    const cards: OpeningCard[] = top3.map(m => ({
-      uci: m.uci,
-      san: m.san,
-      games: gameCount(m),
-      openingName: null,
-      eco: null,
-    }));
+    const cards: OpeningCard[] = top3.map(m => {
+      const known = KNOWN_OPENINGS[m.uci];
+      return {
+        uci: m.uci,
+        san: m.san,
+        games: gameCount(m),
+        openingName: known?.name ?? null,
+        eco: known?.eco ?? null,
+      };
+    });
     setOpeningCards(cards);
     setSelectedCardUci(null);
 
@@ -209,8 +239,17 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
         setPhase('player');
       }
     } catch {
-      // API unavailable — fall back to free play (board stays flipped for black)
-      setPhase('free');
+      // API unavailable — use fallback data so the trainer is still usable
+      if (color === 'white') {
+        const total = FALLBACK_START.reduce((s, m) => s + gameCount(m), 0);
+        setBookMoves(FALLBACK_START);
+        setPositionTotal(total);
+        buildOpeningCards(FALLBACK_START, []);
+        setPhase('player');
+      } else {
+        // Can't have the bot open for black without the API; fall back to free play
+        setPhase('free');
+      }
     }
   };
 
