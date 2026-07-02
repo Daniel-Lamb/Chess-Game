@@ -9,230 +9,16 @@ import {
   DEFAULT_CASTLING_RIGHTS,
 } from '../utils/chessLogic';
 import { moveToUci, uciToMove } from '../utils/uciUtils';
-import { fetchPosition, LichessMove, LichessOpening, gameCount } from '../utils/lichessApi';
+import {
+  lookupOpening,
+  getBookMoves,
+  BookMove,
+  OpeningName,
+  MAX_BOOK_PLIES,
+} from '../utils/openingBook';
 import ChessBoard, { MovePreview } from './ChessBoard';
 
-type Phase = 'setup' | 'player' | 'thinking' | 'off-book' | 'free';
-
-// ── Fallback position tree (offline / API-unavailable) ───────────────────────
-// Key = move history joined with ',' ('' = starting position)
-const FALLBACK_POSITIONS: Record<string, LichessMove[]> = {
-  '': [
-    { uci: 'e2e4', san: 'e4',   white: 400, draws: 100, black: 280, averageRating: 2450 },
-    { uci: 'd2d4', san: 'd4',   white: 340, draws:  95, black: 230, averageRating: 2455 },
-    { uci: 'g1f3', san: 'Nf3',  white: 100, draws:  28, black:  70, averageRating: 2445 },
-    { uci: 'c2c4', san: 'c4',   white:  90, draws:  25, black:  65, averageRating: 2445 },
-  ],
-  'e2e4': [
-    { uci: 'e7e5', san: 'e5',   white: 280, draws:  80, black: 250, averageRating: 2450 },
-    { uci: 'c7c5', san: 'c5',   white: 240, draws:  70, black: 190, averageRating: 2455 },
-    { uci: 'e7e6', san: 'e6',   white: 180, draws:  60, black: 150, averageRating: 2445 },
-    { uci: 'c7c6', san: 'c6',   white: 160, draws:  50, black: 130, averageRating: 2440 },
-    { uci: 'd7d5', san: 'd5',   white: 100, draws:  30, black:  80, averageRating: 2450 },
-  ],
-  'd2d4': [
-    { uci: 'd7d5', san: 'd5',   white: 250, draws:  80, black: 200, averageRating: 2455 },
-    { uci: 'g8f6', san: 'Nf6',  white: 230, draws:  75, black: 180, averageRating: 2460 },
-    { uci: 'c7c5', san: 'c5',   white: 120, draws:  40, black:  95, averageRating: 2450 },
-    { uci: 'f7f5', san: 'f5',   white: 100, draws:  35, black:  80, averageRating: 2440 },
-  ],
-  'g1f3': [
-    { uci: 'd7d5', san: 'd5',   white: 120, draws:  40, black: 100, averageRating: 2450 },
-    { uci: 'g8f6', san: 'Nf6',  white: 110, draws:  38, black:  90, averageRating: 2455 },
-    { uci: 'c7c5', san: 'c5',   white:  90, draws:  30, black:  75, averageRating: 2450 },
-  ],
-  'c2c4': [
-    { uci: 'e7e5', san: 'e5',   white: 100, draws:  35, black:  85, averageRating: 2455 },
-    { uci: 'g8f6', san: 'Nf6',  white:  90, draws:  30, black:  75, averageRating: 2450 },
-    { uci: 'c7c5', san: 'c5',   white:  80, draws:  28, black:  65, averageRating: 2445 },
-  ],
-  'e2e4,e7e5': [
-    { uci: 'g1f3', san: 'Nf3',  white: 200, draws:  65, black: 160, averageRating: 2455 },
-    { uci: 'b1c3', san: 'Nc3',  white: 100, draws:  35, black:  80, averageRating: 2445 },
-    { uci: 'f1c4', san: 'Bc4',  white:  90, draws:  30, black:  70, averageRating: 2445 },
-  ],
-  'e2e4,c7c5': [
-    { uci: 'g1f3', san: 'Nf3',  white: 220, draws:  70, black: 175, averageRating: 2460 },
-    { uci: 'b1c3', san: 'Nc3',  white:  80, draws:  25, black:  65, averageRating: 2450 },
-    { uci: 'c2c3', san: 'c3',   white:  60, draws:  20, black:  50, averageRating: 2445 },
-  ],
-  'e2e4,e7e6': [
-    { uci: 'd2d4', san: 'd4',   white: 180, draws:  60, black: 150, averageRating: 2455 },
-    { uci: 'g1f3', san: 'Nf3',  white:  60, draws:  20, black:  50, averageRating: 2440 },
-  ],
-  'e2e4,c7c6': [
-    { uci: 'd2d4', san: 'd4',   white: 160, draws:  55, black: 130, averageRating: 2455 },
-    { uci: 'b1c3', san: 'Nc3',  white:  80, draws:  25, black:  65, averageRating: 2445 },
-  ],
-  'e2e4,d7d5': [
-    { uci: 'e4d5', san: 'exd5', white: 140, draws:  45, black: 110, averageRating: 2455 },
-    { uci: 'b1c3', san: 'Nc3',  white:  60, draws:  20, black:  50, averageRating: 2445 },
-  ],
-  'd2d4,d7d5': [
-    { uci: 'c2c4', san: 'c4',   white: 200, draws:  70, black: 165, averageRating: 2460 },
-    { uci: 'g1f3', san: 'Nf3',  white: 100, draws:  35, black:  80, averageRating: 2450 },
-    { uci: 'c1f4', san: 'Bf4',  white:  80, draws:  28, black:  65, averageRating: 2445 },
-  ],
-  'd2d4,g8f6': [
-    { uci: 'c2c4', san: 'c4',   white: 220, draws:  75, black: 175, averageRating: 2460 },
-    { uci: 'g1f3', san: 'Nf3',  white: 100, draws:  35, black:  80, averageRating: 2450 },
-    { uci: 'c1f4', san: 'Bf4',  white:  80, draws:  28, black:  65, averageRating: 2445 },
-  ],
-  'd2d4,c7c5': [
-    { uci: 'd4c5', san: 'dxc5', white: 100, draws:  35, black:  82, averageRating: 2450 },
-    { uci: 'g1f3', san: 'Nf3',  white:  90, draws:  30, black:  74, averageRating: 2450 },
-    { uci: 'c2c3', san: 'c3',   white:  50, draws:  18, black:  42, averageRating: 2445 },
-  ],
-  'e2e4,e7e5,g1f3': [
-    { uci: 'b8c6', san: 'Nc6',  white: 180, draws:  60, black: 145, averageRating: 2460 },
-    { uci: 'g8f6', san: 'Nf6',  white: 100, draws:  35, black:  80, averageRating: 2455 },
-    { uci: 'd7d6', san: 'd6',   white:  80, draws:  28, black:  65, averageRating: 2445 },
-  ],
-  'e2e4,e7e5,b1c3': [
-    { uci: 'b8c6', san: 'Nc6',  white: 100, draws:  35, black:  80, averageRating: 2455 },
-    { uci: 'g8f6', san: 'Nf6',  white:  80, draws:  28, black:  65, averageRating: 2450 },
-    { uci: 'f8c5', san: 'Bc5',  white:  70, draws:  24, black:  58, averageRating: 2450 },
-  ],
-  'e2e4,e7e5,f1c4': [
-    { uci: 'g8f6', san: 'Nf6',  white: 100, draws:  35, black:  80, averageRating: 2455 },
-    { uci: 'f8c5', san: 'Bc5',  white:  90, draws:  30, black:  72, averageRating: 2450 },
-    { uci: 'b8c6', san: 'Nc6',  white:  80, draws:  28, black:  65, averageRating: 2445 },
-  ],
-  'e2e4,e7e5,g1f3,b8c6': [
-    { uci: 'f1b5', san: 'Bb5',  white: 160, draws:  55, black: 130, averageRating: 2465 },
-    { uci: 'f1c4', san: 'Bc4',  white: 120, draws:  40, black:  95, averageRating: 2455 },
-    { uci: 'd2d4', san: 'd4',   white:  80, draws:  28, black:  65, averageRating: 2450 },
-  ],
-  'e2e4,e7e5,g1f3,g8f6': [
-    { uci: 'f3e5', san: 'Nxe5', white: 100, draws:  35, black:  80, averageRating: 2460 },
-    { uci: 'b1c3', san: 'Nc3',  white:  80, draws:  28, black:  65, averageRating: 2455 },
-  ],
-  'e2e4,c7c5,g1f3': [
-    { uci: 'd7d6', san: 'd6',   white: 150, draws:  50, black: 120, averageRating: 2460 },
-    { uci: 'b8c6', san: 'Nc6',  white: 130, draws:  45, black: 105, averageRating: 2460 },
-    { uci: 'e7e6', san: 'e6',   white: 120, draws:  40, black:  95, averageRating: 2455 },
-  ],
-  'e2e4,e7e6,d2d4': [
-    { uci: 'd7d5', san: 'd5',   white: 180, draws:  60, black: 145, averageRating: 2455 },
-    { uci: 'b8c6', san: 'Nc6',  white:  60, draws:  20, black:  50, averageRating: 2445 },
-  ],
-  'e2e4,c7c6,d2d4': [
-    { uci: 'd7d5', san: 'd5',   white: 160, draws:  55, black: 130, averageRating: 2460 },
-    { uci: 'g7g6', san: 'g6',   white:  50, draws:  18, black:  42, averageRating: 2445 },
-  ],
-  'd2d4,d7d5,c2c4': [
-    { uci: 'e7e6', san: 'e6',   white: 180, draws:  65, black: 145, averageRating: 2465 },
-    { uci: 'c7c6', san: 'c6',   white: 160, draws:  55, black: 130, averageRating: 2460 },
-    { uci: 'd5c4', san: 'dxc4', white: 140, draws:  45, black: 110, averageRating: 2455 },
-  ],
-  'd2d4,g8f6,c2c4': [
-    { uci: 'e7e6', san: 'e6',   white: 160, draws:  55, black: 130, averageRating: 2460 },
-    { uci: 'g7g6', san: 'g6',   white: 140, draws:  48, black: 115, averageRating: 2460 },
-    { uci: 'c7c5', san: 'c5',   white: 100, draws:  35, black:  82, averageRating: 2455 },
-  ],
-  'e2e4,e7e5,g1f3,b8c6,f1b5': [
-    { uci: 'a7a6', san: 'a6',   white: 140, draws:  48, black: 115, averageRating: 2465 },
-    { uci: 'g8f6', san: 'Nf6',  white: 100, draws:  35, black:  80, averageRating: 2460 },
-    { uci: 'f8c5', san: 'Bc5',  white:  80, draws:  28, black:  65, averageRating: 2455 },
-  ],
-  'e2e4,e7e5,g1f3,b8c6,f1c4': [
-    { uci: 'f8c5', san: 'Bc5',  white: 130, draws:  45, black: 105, averageRating: 2460 },
-    { uci: 'g8f6', san: 'Nf6',  white: 100, draws:  35, black:  80, averageRating: 2455 },
-    { uci: 'd7d6', san: 'd6',   white:  70, draws:  24, black:  58, averageRating: 2450 },
-  ],
-  'e2e4,e7e5,g1f3,b8c6,d2d4': [
-    { uci: 'e5d4', san: 'exd4', white: 100, draws:  35, black:  80, averageRating: 2460 },
-    { uci: 'f8c5', san: 'Bc5',  white:  80, draws:  28, black:  65, averageRating: 2455 },
-  ],
-  'd2d4,d7d5,c2c4,e7e6': [
-    { uci: 'b1c3', san: 'Nc3',  white: 160, draws:  58, black: 130, averageRating: 2465 },
-    { uci: 'g1f3', san: 'Nf3',  white: 140, draws:  50, black: 115, averageRating: 2460 },
-  ],
-  'd2d4,d7d5,c2c4,c7c6': [
-    { uci: 'g1f3', san: 'Nf3',  white: 150, draws:  55, black: 120, averageRating: 2465 },
-    { uci: 'b1c3', san: 'Nc3',  white: 130, draws:  48, black: 105, averageRating: 2460 },
-  ],
-  'd2d4,g8f6,c2c4,e7e6': [
-    { uci: 'b1c3', san: 'Nc3',  white: 150, draws:  55, black: 120, averageRating: 2465 },
-    { uci: 'g1f3', san: 'Nf3',  white: 130, draws:  48, black: 105, averageRating: 2460 },
-  ],
-  'd2d4,g8f6,c2c4,g7g6': [
-    { uci: 'b1c3', san: 'Nc3',  white: 130, draws:  48, black: 105, averageRating: 2465 },
-    { uci: 'g1f3', san: 'Nf3',  white: 110, draws:  40, black:  88, averageRating: 2460 },
-  ],
-};
-
-// Opening name lookup by move-history key (for the "Opening" side-panel display)
-const POSITION_NAMES: Record<string, LichessOpening> = {
-  'e2e4':                            { name: "King's Pawn Opening",       eco: 'B00' },
-  'd2d4':                            { name: "Queen's Pawn Opening",      eco: 'D00' },
-  'g1f3':                            { name: 'Réti Opening',              eco: 'A04' },
-  'c2c4':                            { name: 'English Opening',           eco: 'A10' },
-  'e2e4,e7e5':                       { name: 'Open Game',                 eco: 'C20' },
-  'e2e4,c7c5':                       { name: 'Sicilian Defence',          eco: 'B20' },
-  'e2e4,e7e6':                       { name: 'French Defence',            eco: 'C00' },
-  'e2e4,c7c6':                       { name: 'Caro-Kann Defence',         eco: 'B10' },
-  'e2e4,d7d5':                       { name: 'Scandinavian Defence',      eco: 'B01' },
-  'd2d4,d7d5':                       { name: "Queen's Pawn Game",         eco: 'D00' },
-  'd2d4,g8f6':                       { name: 'Indian Defence',            eco: 'A45' },
-  'd2d4,f7f5':                       { name: 'Dutch Defence',             eco: 'A80' },
-  'd2d4,c7c5':                       { name: 'Old Benoni',                eco: 'A43' },
-  'e2e4,e7e5,g1f3':                  { name: "King's Knight Opening",     eco: 'C44' },
-  'e2e4,e7e5,b1c3':                  { name: 'Vienna Game',               eco: 'C25' },
-  'e2e4,e7e5,f1c4':                  { name: 'Bishop Opening',            eco: 'C24' },
-  'e2e4,e7e5,g1f3,b8c6':            { name: 'Three Knights Game',        eco: 'C46' },
-  'e2e4,e7e5,g1f3,g8f6':            { name: 'Petrov Defence',            eco: 'C42' },
-  'e2e4,c7c5,g1f3':                  { name: 'Sicilian Defence',          eco: 'B40' },
-  'e2e4,e7e6,d2d4':                  { name: 'French Defence',            eco: 'C00' },
-  'e2e4,c7c6,d2d4':                  { name: 'Caro-Kann Defence',         eco: 'B12' },
-  'd2d4,d7d5,c2c4':                  { name: "Queen's Gambit",            eco: 'D06' },
-  'd2d4,g8f6,c2c4':                  { name: 'Indian Defence',            eco: 'E00' },
-  'e2e4,e7e5,g1f3,b8c6,f1b5':       { name: 'Ruy Lopez',                 eco: 'C60' },
-  'e2e4,e7e5,g1f3,b8c6,f1c4':       { name: 'Italian Game',              eco: 'C50' },
-  'e2e4,e7e5,g1f3,b8c6,d2d4':       { name: 'Scotch Game',               eco: 'C44' },
-  'd2d4,d7d5,c2c4,e7e6':            { name: "Queen's Gambit Declined",   eco: 'D30' },
-  'd2d4,d7d5,c2c4,c7c6':            { name: 'Slav Defence',              eco: 'D10' },
-  'd2d4,d7d5,c2c4,d5c4':            { name: "Queen's Gambit Accepted",   eco: 'D20' },
-  'd2d4,g8f6,c2c4,e7e6':            { name: "Queen's Indian / Nimzo",    eco: 'E00' },
-  'd2d4,g8f6,c2c4,g7g6':            { name: "King's Indian Defence",     eco: 'E60' },
-  'e2e4,e7e5,g1f3,b8c6,f1b5,a7a6': { name: 'Ruy Lopez, Morphy Defence', eco: 'C60' },
-  'e2e4,e7e5,g1f3,b8c6,f1c4,f8c5': { name: 'Giuoco Piano',             eco: 'C50' },
-  'e2e4,e7e5,g1f3,b8c6,f1c4,g8f6': { name: 'Two Knights Defence',      eco: 'C55' },
-};
-
-// Single-move labels used as fallback for opening cards
-const KNOWN_OPENINGS: Record<string, { name: string; eco: string }> = {
-  'e2e4': { name: "King's Pawn",    eco: 'B00' },
-  'd2d4': { name: "Queen's Pawn",   eco: 'D00' },
-  'g1f3': { name: 'Réti',          eco: 'A04' },
-  'c2c4': { name: 'English',       eco: 'A10' },
-  'b1c3': { name: 'Van Geet',      eco: 'A00' },
-  'e7e5': { name: 'Open Game',     eco: 'C20' },
-  'c7c5': { name: 'Sicilian',      eco: 'B20' },
-  'e7e6': { name: 'French',        eco: 'C00' },
-  'c7c6': { name: 'Caro-Kann',     eco: 'B10' },
-  'd7d5': { name: 'Scandinavian',  eco: 'B01' },
-  'g8f6': { name: 'Indian Def.',   eco: 'A45' },
-  'f7f5': { name: 'Dutch Def.',    eco: 'A80' },
-  'f1b5': { name: 'Ruy Lopez',     eco: 'C60' },
-  'f1c4': { name: 'Italian Game',  eco: 'C50' },
-  'b8c6': { name: 'Classical',     eco: 'C46' },
-  'f8c5': { name: 'Giuoco Piano',  eco: 'C50' },
-  'a7a6': { name: 'Morphy Def.',   eco: 'C60' },
-};
-
-// Returns the opening name for the current position from local data
-const getLocalOpening = (history: string[]): LichessOpening | null => {
-  for (let len = history.length; len > 0; len--) {
-    const key = history.slice(0, len).join(',');
-    if (POSITION_NAMES[key]) return POSITION_NAMES[key];
-  }
-  return null;
-};
-
-// Returns fallback moves for a position, or [] if unknown
-const getFallbackMoves = (history: string[]): LichessMove[] =>
-  FALLBACK_POSITIONS[history.join(',')] ?? [];
+type Phase = 'setup' | 'explore' | 'off-book' | 'free';
 
 // ── Opening card colours (red / green / blue) ─────────────────────────────────
 const CARD_COLORS = ['#ef4444', '#22c55e', '#3b82f6'] as const;
@@ -246,7 +32,7 @@ const CARD_DOT   = ['bg-red-500', 'bg-green-500', 'bg-blue-500'] as const;
 interface OpeningCard {
   uci: string;
   san: string;
-  games: number;
+  lines: number;
   openingName: string | null;
   eco: string | null;
 }
@@ -297,12 +83,12 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
   const [currentPlayer, setCurrentPlayer] = useState<'white' | 'black'>('white');
   const [enPassant, setEnPassant] = useState<Position | null>(null);
   const [castling, setCastling] = useState<CastlingRights>(DEFAULT_CASTLING_RIGHTS);
-  const [playerColor, setPlayerColor] = useState<'white' | 'black'>('white');
+  const [orientation, setOrientation] = useState<'white' | 'black'>('white');
   const [moveHistory, setMoveHistory] = useState<string[]>([]);
+  const [sanHistory, setSanHistory] = useState<string[]>([]);
 
   const [phase, setPhase] = useState<Phase>('setup');
-  const [opening, setOpening] = useState<LichessOpening | null>(null);
-  const [bookMoves, setBookMoves] = useState<LichessMove[]>([]);
+  const [opening, setOpening] = useState<OpeningName | null>(null);
   const [positionTotal, setPositionTotal] = useState(0);
   const [correction, setCorrection] = useState<string | null>(null);
 
@@ -321,21 +107,22 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
     ep: Position | null,
     cr: CastlingRights,
     mv: string[],
+    sans: string[],
   ) => {
     setBoard(b);
     setCurrentPlayer(cp);
     setEnPassant(ep);
     setCastling(cr);
     setMoveHistory(mv);
+    setSanHistory(sans);
   };
 
   const reset = () => {
-    flush(createInitialBoard(), 'white', null, DEFAULT_CASTLING_RIGHTS, []);
+    flush(createInitialBoard(), 'white', null, DEFAULT_CASTLING_RIGHTS, [], []);
     setSelected(null);
     setHighlights([]);
     setPhase('setup');
     setOpening(null);
-    setBookMoves([]);
     setPositionTotal(0);
     setCorrection(null);
     setOpeningCards([]);
@@ -345,46 +132,29 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
   };
 
   // ── Opening cards builder ─────────────────────────────────────────────────
-  // Builds top-3 cards from the given moves and asynchronously enriches them
-  // with opening names by fetching one move deeper.
-  const buildOpeningCards = (moves: LichessMove[], historyAtPoint: string[]) => {
+  // Builds top-3 suggestion cards for the side to move at the given position.
+  const buildOpeningCards = (moves: BookMove[], historyAtPoint: string[]) => {
     const top3 = moves.slice(0, 3);
     const cards: OpeningCard[] = top3.map(m => {
-      // Prefer the full-position name (context-aware), fall back to single-move label
-      const resultKey = [...historyAtPoint, m.uci].join(',');
-      const nameEntry = POSITION_NAMES[resultKey] ?? KNOWN_OPENINGS[m.uci] ?? null;
+      const named = lookupOpening([...historyAtPoint, m.uci]);
       return {
         uci: m.uci,
         san: m.san,
-        games: gameCount(m),
-        openingName: nameEntry?.name ?? null,
-        eco: nameEntry?.eco ?? null,
+        lines: m.lines,
+        openingName: named?.name ?? null,
+        eco: named?.eco ?? null,
       };
     });
     setOpeningCards(cards);
     setSelectedCardUci(null);
+    setPositionTotal(moves.reduce((s, m) => s + m.lines, 0));
 
     // Show destination squares for all 3 cards as coloured dots on the board
-    const initialPreviews: MovePreview[] = top3.map((m, i) => ({
+    setMovePreviews(top3.map((m, i) => ({
       to: uciToMove(m.uci).to,
       color: CARD_COLORS[i as CardColorIdx],
       san: m.san,
-    }));
-    setMovePreviews(initialPreviews);
-
-    // Background-fetch the opening name for each card
-    top3.forEach(async (move) => {
-      try {
-        const data = await fetchPosition([...historyAtPoint, move.uci]);
-        if (data.opening) {
-          setOpeningCards(prev => prev.map(c =>
-            c.uci === move.uci
-              ? { ...c, openingName: data.opening!.name, eco: data.opening!.eco }
-              : c
-          ));
-        }
-      } catch { /* silently skip */ }
-    });
+    })));
   };
 
   // Reverts movePreviews back to the initial "3 destination dots" state
@@ -398,67 +168,11 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
     );
   };
 
-  // ── Color selection + initial book fetch ──────────────────────────────────
-
-  const startTraining = async (color: 'white' | 'black') => {
-    setPlayerColor(color);
-    setPhase('thinking');
-
-    try {
-      const data = await fetchPosition([]);
-
-      if (color === 'black' && data.moves.length > 0) {
-        // Bot plays white's first move
-        const botMove = data.moves[0];
-        const { from, to } = uciToMove(botMove.uci);
-        const r = doMove(createInitialBoard(), from, to, DEFAULT_CASTLING_RIGHTS, null, 'white');
-        const h = [botMove.uci];
-        flush(r.board, r.player, r.enPassant, r.castling, h);
-        if (data.opening) setOpening(data.opening);
-
-        // Fetch player's options for their first move
-        const playerData = await fetchPosition(h);
-        setBookMoves(playerData.moves.slice(0, 5));
-        setPositionTotal(playerData.white + playerData.draws + playerData.black);
-        if (playerData.opening) setOpening(playerData.opening);
-        buildOpeningCards(playerData.moves, h);
-        setPhase('player');
-      } else if (color === 'black') {
-        // API returned no moves — fall back to free play
-        setPhase('free');
-      } else {
-        setBookMoves(data.moves.slice(0, 5));
-        setPositionTotal(data.white + data.draws + data.black);
-        if (data.opening) setOpening(data.opening);
-        buildOpeningCards(data.moves, []);
-        setPhase('player');
-      }
-    } catch {
-      // API unavailable — use fallback data so the trainer is always playable
-      if (color === 'white') {
-        const fallback = getFallbackMoves([]);
-        const total = fallback.reduce((s, m) => s + gameCount(m), 0);
-        setBookMoves(fallback.slice(0, 5));
-        setPositionTotal(total);
-        buildOpeningCards(fallback, []);
-        setPhase('player');
-      } else {
-        // Bot (white) plays e4 as opening move from fallback
-        const botMove = FALLBACK_POSITIONS[''][0];
-        const { from, to } = uciToMove(botMove.uci);
-        const r = doMove(createInitialBoard(), from, to, DEFAULT_CASTLING_RIGHTS, null, 'white');
-        const h = [botMove.uci];
-        flush(r.board, r.player, r.enPassant, r.castling, h);
-        const local = getLocalOpening(h);
-        if (local) setOpening(local);
-        const playerOptions = getFallbackMoves(h);
-        const total = playerOptions.reduce((s, m) => s + gameCount(m), 0);
-        setBookMoves(playerOptions.slice(0, 5));
-        setPositionTotal(total);
-        buildOpeningCards(playerOptions, h);
-        setPhase('player');
-      }
-    }
+  // ── Start exploring (orientation only — the user plays both sides) ────────
+  const startExploring = (color: 'white' | 'black') => {
+    setOrientation(color);
+    buildOpeningCards(getBookMoves([]), []);
+    setPhase('explore');
   };
 
   // ── Off-book actions ──────────────────────────────────────────────────────
@@ -468,26 +182,26 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
     setCorrection(null);
     setSelected(null);
     setHighlights([]);
-    setPhase('player');
+    setPhase('explore');
   }, []);
 
   const continueAnyway = useCallback(() => {
     const p = pendingMove.current;
     if (!p) return;
     const r = doMove(board, p.from, p.to, castling, enPassant, currentPlayer);
-    flush(r.board, r.player, r.enPassant, r.castling, [...moveHistory, p.uci]);
+    flush(r.board, r.player, r.enPassant, r.castling,
+      [...moveHistory, p.uci], [...sanHistory, p.uci]);
     pendingMove.current = null;
     setCorrection(null);
-    setBookMoves([]);
     setOpeningCards([]);
     setSelectedCardUci(null);
     setMovePreviews([]);
     setPhase('free');
-  }, [board, castling, enPassant, currentPlayer, moveHistory]);
+  }, [board, castling, enPassant, currentPlayer, moveHistory, sanHistory]);
 
   // ── Card selection ────────────────────────────────────────────────────────
 
-  const handleCardSelect = useCallback(async (card: OpeningCard, cardIdx: number) => {
+  const handleCardSelect = useCallback((card: OpeningCard, cardIdx: number) => {
     // Toggle off if already selected
     if (selectedCardUci === card.uci) {
       setSelectedCardUci(null);
@@ -500,89 +214,55 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
     setSelectedCardUci(card.uci);
 
     // Auto-select the piece on the FROM square so the user sees its valid moves
-    const { from } = uciToMove(card.uci);
+    const { from, to } = uciToMove(card.uci);
     setSelected(from);
     setHighlights(getValidMoves(board, from, currentPlayer, enPassant, castling));
 
-    // Show the card's own destination while we fetch continuations
-    setMovePreviews([{
-      to: uciToMove(card.uci).to,
-      color: CARD_COLORS[cardIdx as CardColorIdx],
-      san: card.san,
-    }]);
-
-    // Fetch top-3 continuations after this card's move (opponent responses)
-    try {
-      const data = await fetchPosition([...moveHistory, card.uci]);
-      const top3 = data.moves.slice(0, 3);
-      setMovePreviews(top3.map((resp, i) => ({
+    // Show top-3 replies after this card's move, colour-coded on the board
+    const responses = getBookMoves([...moveHistory, card.uci]).slice(0, 3);
+    if (responses.length > 0) {
+      setMovePreviews(responses.map((resp, i) => ({
         to: uciToMove(resp.uci).to,
         color: CARD_COLORS[i as CardColorIdx],
         san: resp.san,
       })));
-    } catch {
-      setMovePreviews([]);
+    } else {
+      // End of book line — just show this card's own destination
+      setMovePreviews([{
+        to,
+        color: CARD_COLORS[cardIdx as CardColorIdx],
+        san: card.san,
+      }]);
     }
   }, [selectedCardUci, openingCards, board, currentPlayer, enPassant, castling, moveHistory]);
 
   // ── Square click ──────────────────────────────────────────────────────────
 
-  const handleSquareClick = useCallback(async (pos: Position) => {
-    if (phase === 'thinking' || phase === 'setup') return;
-
-    // Free-play mode: normal chess, no book checking
-    if (phase === 'free') {
-      if (!selected) {
-        const piece = board[pos.row][pos.col];
-        if (piece && piece.color === currentPlayer) {
-          setSelected(pos);
-          setHighlights(getValidMoves(board, pos, currentPlayer, enPassant, castling));
-        }
-        return;
-      }
-      if (selected.row === pos.row && selected.col === pos.col) {
-        setSelected(null); setHighlights([]); return;
-      }
-      const cp = board[pos.row][pos.col];
-      if (cp && cp.color === currentPlayer) {
-        setSelected(pos);
-        setHighlights(getValidMoves(board, pos, currentPlayer, enPassant, castling));
-        return;
-      }
-      const from = selected;
-      const isLegal = getValidMoves(board, from, currentPlayer, enPassant, castling)
-        .some(m => m.row === pos.row && m.col === pos.col);
-      setSelected(null); setHighlights([]);
-      if (!isLegal) return;
-      const piece = board[from.row][from.col]!;
-      const promo = piece.type === 'pawn' && (pos.row === 0 || pos.row === 7) ? 'q' : undefined;
-      const r = doMove(board, from, pos, castling, enPassant, currentPlayer);
-      flush(r.board, r.player, r.enPassant, r.castling, [...moveHistory, moveToUci(from, pos, promo)]);
-      return;
-    }
-
+  const handleSquareClick = useCallback((pos: Position) => {
+    if (phase === 'setup') return;
     // Off-book state: board is locked, use the buttons
     if (phase === 'off-book') return;
 
-    // Training mode: only accept the human player's color
-    if (currentPlayer !== playerColor) return;
-
+    // Selection handling (identical for explore + free — user plays both sides)
     if (!selected) {
       const piece = board[pos.row][pos.col];
       if (piece && piece.color === currentPlayer) {
         setSelected(pos);
         setHighlights(getValidMoves(board, pos, currentPlayer, enPassant, castling));
-        // Clear card selection when user manually picks a piece
-        setSelectedCardUci(null);
-        revertPreviews(openingCards);
+        if (phase === 'explore') {
+          setSelectedCardUci(null);
+          revertPreviews(openingCards);
+        }
       }
       return;
     }
 
     if (selected.row === pos.row && selected.col === pos.col) {
       setSelected(null); setHighlights([]);
-      setSelectedCardUci(null);
-      revertPreviews(openingCards);
+      if (phase === 'explore') {
+        setSelectedCardUci(null);
+        revertPreviews(openingCards);
+      }
       return;
     }
 
@@ -590,8 +270,10 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
     if (clickedPiece && clickedPiece.color === currentPlayer) {
       setSelected(pos);
       setHighlights(getValidMoves(board, pos, currentPlayer, enPassant, castling));
-      setSelectedCardUci(null);
-      revertPreviews(openingCards);
+      if (phase === 'explore') {
+        setSelectedCardUci(null);
+        revertPreviews(openingCards);
+      }
       return;
     }
 
@@ -599,111 +281,52 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
     const isLegal = getValidMoves(board, from, currentPlayer, enPassant, castling)
       .some(m => m.row === pos.row && m.col === pos.col);
     setSelected(null); setHighlights([]);
-    setSelectedCardUci(null);
-    setMovePreviews([]);
     if (!isLegal) return;
 
     const movingPiece = board[from.row][from.col]!;
     const promo = movingPiece.type === 'pawn' && (pos.row === 0 || pos.row === 7) ? 'q' : undefined;
     const uci = moveToUci(from, pos, promo);
+    const r = doMove(board, from, pos, castling, enPassant, currentPlayer);
 
-    // Capture current state snapshots — these stay stable across awaits
-    const snapBoard = board;
-    const snapCastling = castling;
-    const snapEnPassant = enPassant;
-    const snapPlayer = currentPlayer;
-    const snapHistory = moveHistory;
-
-    const r = doMove(snapBoard, from, pos, snapCastling, snapEnPassant, snapPlayer);
-    const h = [...snapHistory, uci];
-
-    setPhase('thinking');
-
-    // ── Block 1: Book verification (failure = skip check, assume valid) ────────
-    try {
-      const data = await fetchPosition(snapHistory);
-      if (data.moves.length > 0 && !data.moves.find(m => m.uci === uci)) {
-        pendingMove.current = { from, to: pos, uci };
-        setCorrection(data.moves[0].san);
-        setPhase('off-book');
-        return;
-      }
-      if (data.opening) setOpening(data.opening);
-    } catch {
-      const local = getLocalOpening(h);
-      if (local) setOpening(local);
+    // Free-play mode: just apply the move
+    if (phase === 'free') {
+      flush(r.board, r.player, r.enPassant, r.castling,
+        [...moveHistory, uci], [...sanHistory, uci]);
+      return;
     }
 
-    // Commit user's move regardless of what comes next
-    flush(r.board, r.player, r.enPassant, r.castling, h);
+    // Explore mode: check the move against the book
+    const options = getBookMoves(moveHistory);
+    const match = options.find(m => m.uci === uci);
+
+    if (options.length > 0 && !match) {
+      // Off-book: freeze board, offer retry / continue
+      pendingMove.current = { from, to: pos, uci };
+      setCorrection(options[0].san);
+      setSelectedCardUci(null);
+      setMovePreviews([]);
+      setPhase('off-book');
+      return;
+    }
+
+    const h = [...moveHistory, uci];
+    const sans = [...sanHistory, match?.san ?? uci];
+    flush(r.board, r.player, r.enPassant, r.castling, h, sans);
+    setOpening(lookupOpening(h) ?? opening);
     setSelectedCardUci(null);
-    setMovePreviews([]);
 
-    // Hard cap at 14 plies (7 moves each side)
-    if (h.length >= 14) {
-      setBookMoves([]); setOpeningCards([]); setPhase('free');
+    // Book exhausted or 10 moves reached → free play
+    const next = h.length >= MAX_BOOK_PLIES ? [] : getBookMoves(h);
+    if (next.length === 0) {
+      setOpeningCards([]);
+      setMovePreviews([]);
+      setPhase('free');
       return;
     }
 
-    // ── Block 2: Bot response (failure = try fallback, else go free) ──────────
-    let botMoveData: LichessMove | null = null;
-    try {
-      const botData = await fetchPosition(h);
-      if (botData.opening) setOpening(botData.opening);
-      botMoveData = botData.moves[0] ?? null;
-    } catch {
-      const fallback = getFallbackMoves(h);
-      botMoveData = fallback[0] ?? null;
-    }
-
-    let bh = h;
-    let bBoard = r.board;
-    let bCastling = r.castling;
-    let bEnPassant = r.enPassant;
-    let bPlayer = r.player;
-
-    if (botMoveData) {
-      await new Promise(res => setTimeout(res, 420));
-      const { from: bf, to: bt } = uciToMove(botMoveData.uci);
-      const br = doMove(bBoard, bf, bt, bCastling, bEnPassant, bPlayer);
-      bh = [...h, botMoveData.uci];
-      bBoard = br.board; bCastling = br.castling; bEnPassant = br.enPassant; bPlayer = br.player;
-      flush(br.board, br.player, br.enPassant, br.castling, bh);
-      const local = getLocalOpening(bh);
-      if (local) setOpening(local);
-    } else {
-      // No bot response at all — end of book
-      setBookMoves([]); setOpeningCards([]); setMovePreviews([]); setPhase('free');
-      return;
-    }
-
-    // ── Block 3: Player's next options (failure = try fallback, stay in player) ─
-    try {
-      const nextData = await fetchPosition(bh);
-      if (nextData.opening) setOpening(nextData.opening);
-      if (nextData.moves.length === 0) {
-        setBookMoves([]); setOpeningCards([]); setMovePreviews([]); setPhase('free');
-        return;
-      }
-      setBookMoves(nextData.moves.slice(0, 5));
-      setPositionTotal(nextData.white + nextData.draws + nextData.black);
-      buildOpeningCards(nextData.moves, bh);
-      setPhase('player');
-    } catch {
-      const fallback = getFallbackMoves(bh);
-      if (fallback.length > 0) {
-        const total = fallback.reduce((s, m) => s + gameCount(m), 0);
-        setBookMoves(fallback.slice(0, 5));
-        setPositionTotal(total);
-        buildOpeningCards(fallback, bh);
-        setPhase('player');
-      } else {
-        // No data for this position — keep playing without cards
-        setBookMoves([]); setOpeningCards([]); setMovePreviews([]);
-        setPhase('player');
-      }
-    }
-  }, [board, selected, currentPlayer, playerColor, phase, enPassant, castling, moveHistory, openingCards]);
+    buildOpeningCards(next, h);
+  }, [board, selected, currentPlayer, phase, enPassant, castling,
+      moveHistory, sanHistory, openingCards, opening]);
 
   // ── Setup screen ──────────────────────────────────────────────────────────
 
@@ -711,9 +334,10 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
     return (
       <div className="flex flex-col items-center gap-8 py-6">
         <div className="text-center">
-          <h2 className="text-xl font-bold text-white mb-1">Opening Trainer</h2>
-          <p className="text-gray-400 text-sm">
-            Drill openings against the Lichess master game database
+          <h2 className="text-xl font-bold text-white mb-1">Opening Explorer</h2>
+          <p className="text-gray-400 text-sm max-w-sm">
+            Explore book lines for the first 10 moves. You play both sides —
+            pick suggested continuations or find your own.
           </p>
         </div>
 
@@ -721,7 +345,7 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
           {(['white', 'black'] as const).map(c => (
             <button
               key={c}
-              onClick={() => startTraining(c)}
+              onClick={() => startExploring(c)}
               className={`w-36 py-5 rounded-xl font-bold text-lg shadow-lg transition-colors flex flex-col items-center gap-1 ${
                 c === 'white'
                   ? 'bg-[#F0D9B5] hover:bg-[#e8d0a8] text-gray-900'
@@ -729,7 +353,7 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
               }`}
             >
               <span className="text-3xl">{c === 'white' ? '♔' : '♚'}</span>
-              <span className="text-sm">Play as {c === 'white' ? 'White' : 'Black'}</span>
+              <span className="text-sm">View as {c === 'white' ? 'White' : 'Black'}</span>
             </button>
           ))}
         </div>
@@ -741,15 +365,17 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
     );
   }
 
-  // ── Move history (UCI pairs) ───────────────────────────────────────────────
+  // ── Move history (SAN pairs) ───────────────────────────────────────────────
 
-  const movePairs = moveHistory.reduce<string[][]>((acc, m, i) => {
+  const movePairs = sanHistory.reduce<string[][]>((acc, m, i) => {
     if (i % 2 === 0) acc.push([m]);
     else acc[acc.length - 1].push(m);
     return acc;
   }, []);
 
-  // ── Main training layout ──────────────────────────────────────────────────
+  const moveNumber = Math.floor(moveHistory.length / 2) + 1;
+
+  // ── Main explorer layout ──────────────────────────────────────────────────
 
   return (
     <div className="flex gap-5 items-start">
@@ -758,7 +384,7 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
         selectedPosition={selected}
         validMoves={highlights}
         onSquareClick={handleSquareClick}
-        flipped={playerColor === 'black'}
+        flipped={orientation === 'black'}
         movePreviews={movePreviews}
       />
 
@@ -779,17 +405,11 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
         </div>
 
         {/* Status card */}
-        {phase === 'thinking' && (
-          <div className="bg-gray-800 rounded-lg p-3">
-            <p className="text-gray-400 text-sm animate-pulse">Consulting book…</p>
-          </div>
-        )}
-
-        {phase === 'player' && (
+        {phase === 'explore' && (
           <div className="bg-green-900/40 border border-green-800 rounded-lg p-3">
             <p className="text-green-400 text-sm font-semibold">✓ On book</p>
             <p className="text-gray-400 text-xs mt-0.5">
-              {playerColor === 'white' ? '⬜' : '⬛'} Your move
+              {currentPlayer === 'white' ? '⬜ White' : '⬛ Black'} to move · move {moveNumber} of 10
             </p>
           </div>
         )}
@@ -799,7 +419,7 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
             <p className="text-red-400 text-sm font-semibold mb-1">✗ Off book</p>
             {correction && (
               <p className="text-gray-300 text-xs mb-3">
-                Book move:{' '}
+                Most popular:{' '}
                 <span className="font-mono font-bold text-white">{correction}</span>
               </p>
             )}
@@ -821,21 +441,25 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
         {phase === 'free' && (
           <div className="bg-blue-900/40 border border-blue-800 rounded-lg p-3">
             <p className="text-blue-400 text-sm font-semibold">Opening complete</p>
-            <p className="text-gray-400 text-xs mt-0.5">Continue from here freely</p>
+            <p className="text-gray-400 text-xs mt-0.5">
+              {moveHistory.length >= MAX_BOOK_PLIES
+                ? '10 moves reached — continue freely'
+                : 'End of book — continue freely'}
+            </p>
           </div>
         )}
 
         {/* ── Opening card explorer ─────────────────────────────────────── */}
-        {phase === 'player' && openingCards.length > 0 && (
+        {phase === 'explore' && openingCards.length > 0 && (
           <div className="bg-gray-800 rounded-lg p-3">
             <div className="text-xs text-gray-500 uppercase tracking-wider mb-2">
-              Continuations
+              Continuations · {currentPlayer === 'white' ? 'White' : 'Black'}
             </div>
             <div className="flex flex-col gap-1.5">
               {openingCards.map((card, i) => {
                 const isSelected = selectedCardUci === card.uci;
                 const pct = positionTotal > 0
-                  ? Math.round((card.games / positionTotal) * 100)
+                  ? Math.round((card.lines / positionTotal) * 100)
                   : 0;
 
                 return (
@@ -863,14 +487,14 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
                           {card.openingName}
                         </span>
                       ) : (
-                        <span className="text-xs text-gray-600 animate-pulse">Loading…</span>
+                        <span className="text-xs text-gray-600">Book move</span>
                       )}
                     </div>
 
-                    {/* Continuations shown when this card is selected */}
+                    {/* Replies shown when this card is selected */}
                     {isSelected && (
                       <div className="mt-2 pt-2 border-t border-gray-700/60">
-                        <div className="text-xs text-gray-500 mb-1.5">Top responses:</div>
+                        <div className="text-xs text-gray-500 mb-1.5">Top replies:</div>
                         {movePreviews.length > 0 ? (
                           <div className="flex flex-col gap-1">
                             {movePreviews.map((p, j) => (
@@ -889,7 +513,7 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
                             ))}
                           </div>
                         ) : (
-                          <span className="text-xs text-gray-600 animate-pulse">Fetching…</span>
+                          <span className="text-xs text-gray-600">End of book line</span>
                         )}
                       </div>
                     )}
@@ -901,7 +525,7 @@ const OpeningTrainer: React.FC<Props> = ({ onExit }) => {
         )}
 
         {/* Move history */}
-        {moveHistory.length > 0 && (
+        {sanHistory.length > 0 && (
           <div className="bg-gray-800 rounded-lg p-3">
             <div className="text-xs text-gray-500 uppercase tracking-wider mb-2">Moves</div>
             <div className="font-mono text-xs space-y-0.5 max-h-36 overflow-y-auto">
