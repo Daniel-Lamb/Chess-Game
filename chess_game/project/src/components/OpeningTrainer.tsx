@@ -3,11 +3,9 @@ import { Board, Position, CastlingRights } from '../types/chess';
 import {
   createInitialBoard,
   getValidMoves,
-  promotePawn,
-  getEnPassantTarget,
-  updateCastlingRights,
   DEFAULT_CASTLING_RIGHTS,
 } from '../utils/chessLogic';
+import { doMove } from '../utils/moveExec';
 import { moveToUci, uciToMove } from '../utils/uciUtils';
 import {
   lookupOpening,
@@ -36,41 +34,6 @@ interface OpeningCard {
   openingName: string | null;
   eco: string | null;
 }
-
-// Applies a move (+ castling / en passant / promotion side effects) and returns updated state.
-const doMove = (
-  board: Board,
-  from: Position,
-  to: Position,
-  castling: CastlingRights,
-  enPassant: Position | null,
-  player: 'white' | 'black',
-) => {
-  const piece = board[from.row][from.col]!;
-  let nb = board.map(r => [...r]);
-  nb[to.row][to.col] = piece;
-  nb[from.row][from.col] = null;
-
-  if (piece.type === 'king' && Math.abs(to.col - from.col) === 2) {
-    const r = from.row;
-    if (to.col === 6) { nb[r][5] = nb[r][7]; nb[r][7] = null; }
-    else              { nb[r][3] = nb[r][0]; nb[r][0] = null; }
-  }
-
-  if (piece.type === 'pawn' && enPassant &&
-      to.row === enPassant.row && to.col === enPassant.col) {
-    nb[from.row][to.col] = null;
-  }
-
-  nb = promotePawn(nb, to);
-
-  return {
-    board: nb,
-    castling: updateCastlingRights(castling, from, to, piece),
-    enPassant: getEnPassantTarget(from, to, piece),
-    player: (player === 'white' ? 'black' : 'white') as 'white' | 'black',
-  };
-};
 
 interface Props {
   onExit: () => void;

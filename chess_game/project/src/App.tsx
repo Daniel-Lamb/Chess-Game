@@ -13,8 +13,9 @@ import {
 } from './utils/chessLogic';
 import ChessBoard from './components/ChessBoard';
 import OpeningTrainer from './components/OpeningTrainer';
+import LearnOpenings from './components/LearnOpenings';
 
-type AppMode = 'play' | 'train';
+type AppMode = 'play' | 'train' | 'learn';
 type GameStatus = 'playing' | 'check' | 'checkmate' | 'stalemate';
 
 interface Snapshot {
@@ -181,6 +182,9 @@ function App() {
           <button className={tabClass('train')} onClick={() => setMode('train')}>
             Opening Trainer
           </button>
+          <button className={tabClass('learn')} onClick={() => setMode('learn')}>
+            Learn Openings
+          </button>
         </div>
 
         {/* Free play */}
@@ -244,6 +248,11 @@ function App() {
         {/* Opening trainer */}
         {mode === 'train' && (
           <OpeningTrainer onExit={() => setMode('play')} />
+        )}
+
+        {/* Learn openings */}
+        {mode === 'learn' && (
+          <LearnOpenings />
         )}
       </div>
     </div>
